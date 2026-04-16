@@ -387,13 +387,6 @@
   <div class="panel">
     <div class="panel-inner">
 
-      <!-- Config note — update with your web map ID -->
-      <div class="config-note">
-        <strong>Setup required:</strong> Edit the <code>CONFIG</code> block at the top
-        of this file's <code>&lt;script&gt;</code> to set your
-        <strong>Web Map ID</strong> and match your layer titles.
-      </div>
-
       <!-- Buffer -->
       <div class="section-label">Buffer distance</div>
       <div class="buffer-row">
@@ -480,66 +473,167 @@ require([
 ) {
 
   // ══════════════════════════════════════════════════════════════════════════
-  // ██  CONFIG — EDIT THIS SECTION
+  // ██  CONFIG
   // ══════════════════════════════════════════════════════════════════════════
   const CONFIG = {
 
-    // Your ArcGIS Online portal URL (leave as-is for ArcGIS Online)
     portalUrl: "https://www.arcgis.com",
-
-    // The Item ID of your web map (from the URL when viewing in Map Viewer)
-    webMapId: "YOUR_WEB_MAP_ITEM_ID",
-
-    // Optional: your ArcGIS Online App ID for OAuth login
-    // Create one at: ArcGIS Online > Content > New Item > Application
-    // Leave blank to use public/anonymous access
+    webMapId:  "51a20531f9f44c4682f1bb246981ea86",
     appId: "",
 
-    // Layer title regex — matches any layer whose title contains these patterns.
-    // The tool will hit-test only these layers when the user clicks the map.
-    redLineTitlePattern: /red.?line|site.?boundar|application.?boundar/i,
+    // Matches the red line boundary layer by title
+    redLineTitlePattern: /red.?line.?boundar/i,
 
-    // Ecological layers to query.
-    // title        — must exactly match the layer title in your web map
-    // shortName    — used in the report text
-    // nameField    — the attribute field holding the feature/designation name
-    // type         — "statutory" | "habitat" | "records"
-    // groupByField — true: summarise unique values of nameField (good for PHI habitat types)
-    // maxList      — max number of names to spell out in the report sentence
+    // ── Layers ──────────────────────────────────────────────────────────────
+    // title        — exact layer title as it appears in the web map
+    // shortName    — used in the report paragraph
+    // nameField    — attribute field holding the designation/feature name
+    //                set to null for layers where just the count is reported
+    // type         — "statutory" | "habitat" | "river" | "bat" | "records"
+    // groupByField — true: list unique nameField values (e.g. habitat types)
+    // maxList      — max names to spell out before "and N others"
     layers: [
-      { title: "Sites of Special Scientific Interest (SSSI)",
+
+      // ── England: statutory designations ──────────────────────────────────
+      { title: "Sites of Special Scientific Interest (England)",
         shortName: "Sites of Special Scientific Interest (SSSIs)",
-        nameField: "SSSI_NAME", type: "statutory" },
+        nameField: "SSSI_NAME", type: "statutory", maxList: 4 },
 
-      { title: "Special Areas of Conservation (SAC)",
+      { title: "Special Areas of Conservation (England)",
         shortName: "Special Areas of Conservation (SACs)",
-        nameField: "SAC_NAME", type: "statutory" },
+        nameField: "SAC_NAME", type: "statutory", maxList: 4 },
 
-      { title: "Special Protection Areas (SPA)",
+      { title: "Special Protection Areas (England)",
         shortName: "Special Protection Areas (SPAs)",
-        nameField: "SPA_NAME", type: "statutory" },
+        nameField: "SPA_NAME", type: "statutory", maxList: 4 },
 
-      { title: "Ramsar Sites",
+      { title: "Ramsar (England)",
         shortName: "Ramsar wetland sites",
-        nameField: "RAMSAR_NAME", type: "statutory" },
+        nameField: "RAMSAR_NAME", type: "statutory", maxList: 4 },
 
-      { title: "Local Nature Reserves (LNR)",
+      { title: "National Nature Reserves (England)",
+        shortName: "National Nature Reserves (NNRs)",
+        nameField: "NNR_Name", type: "statutory", maxList: 4 },
+
+      { title: "Local Nature Reserves (England)",
         shortName: "Local Nature Reserves (LNRs)",
-        nameField: "LNR_NAME", type: "statutory" },
+        nameField: "LNR_NAME", type: "statutory", maxList: 4 },
 
-      { title: "Ancient Woodland",
+      { title: "Areas of Outstanding Natural Beauty (England)",
+        shortName: "Areas of Outstanding Natural Beauty (AONBs)",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      { title: "National Parks (England)",
+        shortName: "National Parks",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      // ── Wales: statutory designations ────────────────────────────────────
+      { title: "SSSI",
+        shortName: "Sites of Special Scientific Interest (SSSIs) (Wales)",
+        nameField: "SSSI_NAME", type: "statutory", maxList: 4 },
+
+      { title: "SAC",
+        shortName: "Special Areas of Conservation (SACs) (Wales)",
+        nameField: "SAC_NAME", type: "statutory", maxList: 4 },
+
+      { title: "SPA",
+        shortName: "Special Protection Areas (SPAs) (Wales)",
+        nameField: "SPA_NAME", type: "statutory", maxList: 4 },
+
+      { title: "RAMSAR",
+        shortName: "Ramsar wetland sites (Wales)",
+        nameField: "RAMSAR_NAME", type: "statutory", maxList: 4 },
+
+      { title: "NNR",
+        shortName: "National Nature Reserves (NNRs) (Wales)",
+        nameField: "NNR_Name", type: "statutory", maxList: 4 },
+
+      { title: "LNR",
+        shortName: "Local Nature Reserves (LNRs) (Wales)",
+        nameField: "LNR_NAME", type: "statutory", maxList: 4 },
+
+      { title: "AONB",
+        shortName: "Areas of Outstanding Natural Beauty (AONBs) (Wales)",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      { title: "National Park",
+        shortName: "National Parks (Wales)",
+        nameField: "NAME", type: "statutory", maxList: 4 },
+
+      // ── England: habitats ─────────────────────────────────────────────────
+      { title: "Ancient Woodland (England)",
         shortName: "ancient woodland",
-        nameField: "NAME", type: "habitat" },
+        nameField: "NAME", type: "habitat", maxList: 4 },
 
-      { title: "Priority Habitat Inventory",
+      { title: "Priority Habitats Inventory (England)",
         shortName: "Priority Habitat Inventory parcels",
         nameField: "Main_Habit", type: "habitat",
         groupByField: true, maxList: 6 },
 
-      { title: "iNaturalist Records",
-        shortName: "iNaturalist biodiversity records",
-        nameField: "species_name", type: "records",
-        maxList: 5 },
+      // ── Wales: habitats ───────────────────────────────────────────────────
+      { title: "Ancient Woodland",
+        shortName: "ancient woodland (Wales)",
+        nameField: "NAME", type: "habitat", maxList: 4 },
+
+      { title: "Priority Habitats - High sensitivity (Wales)",
+        shortName: "Priority Habitats of high sensitivity (Wales)",
+        nameField: "Hab_Type", type: "habitat",
+        groupByField: true, maxList: 6 },
+
+      // ── River habitats ────────────────────────────────────────────────────
+      { title: "Priority River Habitat - Rivers (England)",
+        shortName: "Priority River Habitat — Rivers",
+        nameField: null, type: "river" },
+
+      { title: "Priority River Habitat - Headwater Areas (England)",
+        shortName: "Priority River Habitat — Headwater Areas",
+        nameField: null, type: "river" },
+
+      { title: "Chalk Rivers (England)",
+        shortName: "Chalk Rivers",
+        nameField: null, type: "river" },
+
+      { title: "EA Statutory Rivers",
+        shortName: "EA Statutory Rivers",
+        nameField: null, type: "river" },
+
+      // ── Bat consultation zones (individual layers within group) ───────────
+      { title: "Wiltshire",
+        shortName: "Bat Consultation Zone — Wiltshire",
+        nameField: null, type: "bat" },
+
+      { title: "Trowbridge SPD",
+        shortName: "Bat Consultation Zone — Trowbridge SPD",
+        nameField: null, type: "bat" },
+
+      { title: "North Somerset and",
+        shortName: "Bat Consultation Zone — North Somerset",
+        nameField: null, type: "bat" },
+
+      { title: "Mendips",
+        shortName: "Bat Consultation Zone — Mendips",
+        nameField: null, type: "bat" },
+
+      { title: "Hestercombe House",
+        shortName: "Bat Consultation Zone — Hestercombe House",
+        nameField: null, type: "bat" },
+
+      { title: "Exmoor and Quantocks",
+        shortName: "Bat Consultation Zone — Exmoor and Quantocks",
+        nameField: null, type: "bat" },
+
+      { title: "Mells Valley",
+        shortName: "Bat Consultation Zone — Mells Valley",
+        nameField: null, type: "bat" },
+
+      // ── Biodiversity records ──────────────────────────────────────────────
+      { title: "iNaturalist Observations",
+        shortName: "iNaturalist biodiversity observations",
+        nameField: "Common Name", type: "records", maxList: 5 },
+
+      { title: "C&W In-house Records",
+        shortName: "C&W in-house biodiversity records",
+        nameField: "Common Name", type: "records", maxList: 5 },
     ],
   };
   // ══════════════════════════════════════════════════════════════════════════
@@ -779,52 +873,77 @@ require([
     let para = `A ${bufLabel} buffer was applied to the red line boundary of the application site and interrogated against national open access ecological datasets on ${date}. `;
 
     if (found.length === 0) {
-      para += `No statutory designated sites, priority habitats, or notable biodiversity records were identified within the ${bufLabel} search radius.`;
+      para += `No statutory designated sites, priority habitats, bat consultation zones, priority river habitats, or notable biodiversity records were identified within the ${bufLabel} search radius.`;
       if (missing.length) para += ` Note: the following layers could not be queried and should be checked manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`;
       return para;
     }
 
-    // Statutory designations
+    // ── Statutory designations ──────────────────────────────────────────────
     const statutory = found.filter(r => r.cfg.type === "statutory");
     if (statutory.length) {
       para += `The following statutory nature conservation designations were recorded within the ${bufLabel} buffer: `;
       const items = statutory.map(r => {
         const n = r.cfg.maxList || 4;
-        return `${r.count} ${r.cfg.shortName} (${nameList(r.names, n)})`;
+        if (r.cfg.nameField && r.names.length) {
+          return `${r.count} ${r.cfg.shortName} (${nameList(r.names, n)})`;
+        }
+        return `${r.count} ${r.cfg.shortName}`;
       });
       para += oxfordList(items) + ". ";
     }
 
-    // Habitats
+    // ── Habitats ────────────────────────────────────────────────────────────
     const habitats = found.filter(r => r.cfg.type === "habitat");
     if (habitats.length) {
       para += "In terms of designated and priority habitats, ";
       const items = habitats.map(r => {
         const n = r.cfg.maxList || 5;
-        if (r.cfg.groupByField) {
+        if (r.cfg.groupByField && r.names.length) {
           return `${r.count} ${r.cfg.shortName} were identified, comprising ${nameList(r.names, n)}`;
         }
-        return `${r.count} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} recorded (${nameList(r.names, n)})`;
+        if (r.cfg.nameField && r.names.length) {
+          return `${r.count} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} recorded (${nameList(r.names, n)})`;
+        }
+        return `${r.count} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} recorded`;
       });
       para += oxfordList(items) + ". ";
     }
 
-    // Records
+    // ── River habitats ──────────────────────────────────────────────────────
+    const rivers = found.filter(r => r.cfg.type === "river");
+    if (rivers.length) {
+      para += "With regard to watercourses and river habitats, the buffer intersects ";
+      const items = rivers.map(r =>
+        `${r.count} feature${r.count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer`
+      );
+      para += oxfordList(items) + ". ";
+    }
+
+    // ── Bat consultation zones ──────────────────────────────────────────────
+    const bats = found.filter(r => r.cfg.type === "bat");
+    if (bats.length) {
+      const zoneNames = bats.map(r => r.cfg.shortName.replace("Bat Consultation Zone — ", ""));
+      para += `The site falls within ${bats.length > 1 ? `${bats.length} Bat Consultation Zones` : "a Bat Consultation Zone"} (${oxfordList(zoneNames)}), indicating that bat survey requirements should be considered as part of any ecological assessment. `;
+    }
+
+    // ── Biodiversity records ────────────────────────────────────────────────
     const records = found.filter(r => r.cfg.type === "records");
     records.forEach(r => {
       const n = r.cfg.maxList || 5;
       para += `A total of ${r.count} ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} retrieved within the buffer`;
-      if (r.names.length) para += `, including records of ${nameList(r.names, n)}`;
+      if (r.cfg.nameField && r.names.length) {
+        para += `, including records of ${nameList(r.names, n)}`;
+      }
       para += ". ";
     });
 
-    // Absent layers
-    const absentNames = absent.map(r => r.cfg.shortName);
-    if (absentNames.length && absentNames.length <= 5) {
-      para += `No ${oxfordList(absentNames)} ${absentNames.length === 1 ? "was" : "were"} recorded within the search area. `;
+    // ── Absent designations (only list if 5 or fewer to keep text clean) ───
+    const absentStatutory = absent.filter(r => r.cfg.type === "statutory").map(r => r.cfg.shortName);
+    if (absentStatutory.length && absentStatutory.length <= 5) {
+      para += `No ${oxfordList(absentStatutory)} ${absentStatutory.length === 1 ? "was" : "were"} recorded within the search area. `;
     }
 
-    // Missing layers warning
+    // ── Missing layers warning ──────────────────────────────────────────────
     if (missing.length) {
       para += `Note: the following layers could not be queried and should be verified manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`;
     }
