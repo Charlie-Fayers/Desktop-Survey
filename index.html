@@ -1010,8 +1010,16 @@ require([
     el.textContent = msg;
   }
 
+  let jnccPromiseRef = null; // single shared promise for concurrent callers
+
   async function loadJncc() {
-    if (jnccLookup !== null || jnccLoading) return;
+    if (jnccLookup !== null) return;   // already loaded
+    if (jnccPromiseRef) return jnccPromiseRef; // already loading — return same promise
+    jnccPromiseRef = _doLoadJncc();
+    return jnccPromiseRef;
+  }
+
+  async function _doLoadJncc() {
     jnccLoading = true;
 
     // Wait for SheetJS to be available
@@ -1038,38 +1046,47 @@ require([
       const buf  = await resp.arrayBuffer();
       const wb   = xlsxLib.read(buf, { type: "array" });
 
-      // Prefer Summary sheet (one row per taxon) over Master List
-      const sheetName = wb.SheetNames.find(n => /summary/i.test(n)) ||
-                        wb.SheetNames.find(n => /master/i.test(n)) ||
-                        wb.SheetNames[0];
-      if (!sheetName) throw new Error("No sheet found in workbook");
+      // "Summary of Each Taxon" sheet — headers are on row 5 (index 4)
+      // Prefer this over Master List as it has one row per taxon
+      const summarySheet = wb.SheetNames.find(n => /summary/i.test(n));
+      const masterSheet  = wb.SheetNames.find(n => /master/i.test(n));
+      const sheetName    = summarySheet || masterSheet || wb.SheetNames[0];
+      const isSummary    = !!summarySheet && sheetName === summarySheet;
 
+      console.log("JNCC: sheets:", wb.SheetNames, "| using:", sheetName, "| isSummary:", isSummary);
       setJnccStatus(`⏳ Parsing sheet: "${sheetName}"…`, "loading");
 
       const raw = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" });
 
-      // Find the header row (scan first 20 rows)
+      // For Summary sheet, headers are always on row 5 (index 4)
+      // For Master List, scan for the header row
       let headerRowIdx = -1;
-      for (let i = 0; i < Math.min(raw.length, 20); i++) {
-        const rowStr = raw[i].join("|").toLowerCase();
-        if ((rowStr.includes("taxon") || rowStr.includes("recommended")) &&
-            (rowStr.includes("wca") || rowStr.includes("designation") || rowStr.includes("bocc") || rowStr.includes("habitats"))) {
-          headerRowIdx = i;
-          break;
+      if (isSummary) {
+        headerRowIdx = 4; // row 5 in Excel = index 4
+      } else {
+        for (let i = 0; i < Math.min(raw.length, 50); i++) {
+          const cells = raw[i].map(c => String(c).trim()).filter(Boolean);
+          const rowStr = cells.join("|").toLowerCase();
+          if (/recommended taxon|taxon name/i.test(rowStr) &&
+              /reporting category|designation|wca/i.test(rowStr) &&
+              cells.length >= 3) {
+            headerRowIdx = i;
+            break;
+          }
         }
       }
-      if (headerRowIdx === -1) throw new Error(`Header not found. First row: ${raw[0]?.slice(0,5).join(", ")}`);
+      if (headerRowIdx === -1) throw new Error(`No header row found in "${sheetName}"`);
 
       const headers = raw[headerRowIdx].map(h => String(h).trim());
       const rows = raw.slice(headerRowIdx + 1).map(r => {
         const obj = {};
         headers.forEach((h, i) => { obj[h] = r[i] !== undefined ? r[i] : ""; });
         return obj;
-      }).filter(r => Object.values(r).some(v => v !== ""));
+      }).filter(r => Object.values(r).some(v => String(v).trim() !== ""));
 
-      // Log all column names to console for debugging
-      console.log("JNCC sheet:", sheetName, "| headers:", headers.join(" | "));
-      if (rows[0]) console.log("JNCC sample row:", JSON.stringify(rows[0]).slice(0, 300));
+      console.log(`JNCC: header row ${headerRowIdx}, ${rows.length} data rows`);
+      console.log("JNCC: ALL headers:", headers.join(" | "));
+      console.log("JNCC: sample row:", JSON.stringify(rows[0]).slice(0, 300));
 
       setJnccStatus(`⏳ Building lookup (${rows.length} rows)…`, "loading");
 
@@ -1188,10 +1205,11 @@ require([
         .slice(0,3).map(([k]) => k).join(", ");
 
       if (n === 0) {
-        const sample = rows[0] ? JSON.stringify(rows[0]).slice(0, 200) : "no rows";
-        setJnccStatus(`✗ 0 taxa matched. First row: ${sample}`, "error");
+        const hdrSample = headers.slice(0, 8).join(" | ");
+        const rowSample = rows[0] ? JSON.stringify(rows[0]).slice(0, 200) : "no data rows";
+        setJnccStatus(`✗ 0 taxa. Hdr row ${headerRowIdx}: ${hdrSample} || Data: ${rowSample}`, "error");
       } else {
-        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa. BoCC5 sample: ${bocc5Sample || "none found"}`, "ok");
+        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa. BoCC5: ${bocc5Sample || "none"}`, "ok");
       }
 
     } catch(e) {
@@ -1210,9 +1228,6 @@ require([
     buildLayerPanel();
     buildBufferGroups();
   });
-
-  // Start JNCC loading immediately — don't wait for map to be ready
-  loadJncc();
 
   // ── Layer panel ───────────────────────────────────────────────────────────
   window.toggleLayerPanel = function() {
@@ -1517,6 +1532,9 @@ require([
     setStatus("running", "Building buffers and querying layers…");
     showProgress(5, "Building buffers…");
 
+    // Kick off JNCC loading NOW in parallel — it runs while buffers are built and layers queried
+    const jnccPromise = loadJncc();
+
     // Build one buffer geometry per category
     const bufGeoms = {};
     for (const [cat, km] of Object.entries(buffers)) {
@@ -1759,6 +1777,11 @@ require([
 
     hideProgress();
     renderLayerList(results);
+
+    // Await JNCC in parallel — by now it will usually already be done
+    setStatus("running", "Finalising report…");
+    await jnccPromise;
+
     setStatus("running", "Calculating distances and building report…");
     const report = await buildReport(results, buffers, selectedGeom);
     renderReport(report);
