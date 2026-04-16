@@ -1480,7 +1480,7 @@ require([
         // Append designation type to name where the name field doesn't include it
         const sn = r.cfg.shortName.toLowerCase();
         if (sn.includes("ramsar") && !/ramsar/i.test(name)) {
-          name = `${name} RAMSAR`;
+          name = `${name} Ramsar Site`;
         } else if (sn.includes("spa") && !/spa|special protection/i.test(name)) {
           name = `${name} SPA`;
         } else if (sn.includes("sac") && !/sac|special area/i.test(name)) {
@@ -1837,27 +1837,68 @@ require([
         return parts.join("") || run(td.innerText.trim(), sz, isHdr, textCol);
       }
 
+      // ── Layout constants (twips: 1 inch = 1440, 1 cm ≈ 567) ──────────────
+      // Paragraph number column: 800 twips (~1.4cm), body text indented to 1200
+      const NUM_W  = 800;   // width of the number tab stop
+      const BODY_L = 1200;  // left indent for body text and hanging paragraphs
+      const AFTER  = 100;   // space after paragraph (points × 20 = twips... actually in twentieths of a point)
+      const LINE   = "single";
+
+      // Paragraph properties shared by all numbered body paragraphs
+      // Uses a hanging indent: left=BODY_L, hanging=BODY_L so the number sits at 0
+      function bodyPPr(before) {
+        return `<w:pPr>
+          <w:jc w:val="both"/>
+          <w:spacing w:line="240" w:lineRule="auto" w:before="${before||0}" w:after="${AFTER}"/>
+          <w:ind w:left="${BODY_L}" w:hanging="${BODY_L}"/>
+        </w:pPr>`;
+      }
+
+      // Plain indented paragraph (no number — for headings, bullets etc.)
+      function indentPPr(before, after) {
+        return `<w:pPr>
+          <w:jc w:val="both"/>
+          <w:spacing w:line="240" w:lineRule="auto" w:before="${before||0}" w:after="${after||AFTER}"/>
+          <w:ind w:left="${BODY_L}"/>
+        </w:pPr>`;
+      }
+
       let body = "";
       el.childNodes.forEach(node => {
         if (node.nodeType !== 1) return;
         const tag = node.tagName.toLowerCase();
+
         if (tag === "h2") {
-          body += `<w:p><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr>${run(node.innerText,SZ9,true,GREEN)}</w:p>`;
+          // Section heading — bold, indented, extra space before
+          body += `<w:p>${indentPPr(200, 60)}${run(node.innerText,SZ9,true,"000000")}</w:p>`;
+
         } else if (tag === "h3") {
-          body += `<w:p><w:pPr><w:spacing w:before="100" w:after="40"/></w:pPr>${run(node.innerText,SZ9,true,"444444")}</w:p>`;
+          // Sub-heading — italic underline, indented
+          body += `<w:p>${indentPPr(80, 40)}<w:r><w:rPr><w:i/><w:u w:val="single"/><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr><w:t>${esc(node.innerText)}</w:t></w:r></w:p>`;
+
         } else if (tag === "p") {
           const ns = node.querySelector(".para-num");
           const ph = node.querySelector(".placeholder");
-          let runs = ns ? run(ns.innerText+" ",SZ9,true) : "";
-          runs += run(node.innerText.replace(ns?.innerText||"","").trim(),SZ9,false,ph?"8A6200":"111D13");
-          body += par(runs);
+          const bodyText = node.innerText.replace(ns?.innerText||"","").trim();
+          const textCol = ph ? "8A6200" : "000000";
+
+          if (ns) {
+            // Numbered paragraph — number at position 0, body text at BODY_L
+            // Use a tab between number and text to create the hanging indent effect
+            body += `<w:p>${bodyPPr()}<w:r>${rpr(SZ9,true,"000000")}<w:t xml:space="preserve">${esc(ns.innerText)}</w:t></w:r><w:r><w:rPr><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/></w:rPr><w:tab/></w:r><w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(bodyText)}</w:t></w:r></w:p>`;
+          } else {
+            // Un-numbered paragraph (e.g. table captions)
+            body += `<w:p>${indentPPr()}<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(bodyText)}</w:t></w:r></w:p>`;
+          }
+
         } else if (tag === "ul") {
           node.querySelectorAll("li").forEach(li => {
-            body += `<w:p><w:pPr><w:spacing w:after="40"/><w:ind w:left="360"/></w:pPr>${run("\u2022 "+li.innerText,SZ9)}</w:p>`;
+            body += `<w:p><w:pPr><w:jc w:val="both"/><w:spacing w:line="240" w:lineRule="auto" w:after="${AFTER}"/><w:ind w:left="${BODY_L + 360}" w:hanging="200"/></w:pPr>${run("\u2022\t"+li.innerText,SZ9)}</w:p>`;
           });
+
         } else if (tag === "table") {
           const rows = node.querySelectorAll("tr");
-          let tbl = `<w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="${LINE}"/><w:left w:val="single" w:sz="4" w:color="${LINE}"/><w:bottom w:val="single" w:sz="4" w:color="${LINE}"/><w:right w:val="single" w:sz="4" w:color="${LINE}"/><w:insideH w:val="single" w:sz="4" w:color="${LINE}"/><w:insideV w:val="single" w:sz="4" w:color="${LINE}"/></w:tblBorders></w:tblPr>`;
+          let tbl = `<w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="C9DECE"/><w:left w:val="single" w:sz="4" w:color="C9DECE"/><w:bottom w:val="single" w:sz="4" w:color="C9DECE"/><w:right w:val="single" w:sz="4" w:color="C9DECE"/><w:insideH w:val="single" w:sz="4" w:color="C9DECE"/><w:insideV w:val="single" w:sz="4" w:color="C9DECE"/></w:tblBorders></w:tblPr>`;
           rows.forEach((tr,ri) => {
             const cells = tr.querySelectorAll("th,td");
             const isHdr = cells[0]?.tagName==="TH";
@@ -1867,8 +1908,8 @@ require([
             cells.forEach(td => {
               const content = isHdr
                 ? run(td.innerText.trim(), SZ8, true, "FFFFFF")
-                : cellContent(td, SZ8, false, "111D13");
-              row += `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:shd w:val="clear" w:fill="${fill}"/></w:tcPr><w:p><w:pPr><w:spacing w:after="40" w:before="40"/></w:pPr>${content}</w:p></w:tc>`;
+                : cellContent(td, SZ8, false, "000000");
+              row += `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:shd w:val="clear" w:fill="${fill}"/></w:tcPr><w:p><w:pPr><w:spacing w:line="240" w:lineRule="auto" w:after="40" w:before="40"/></w:pPr>${content}</w:p></w:tc>`;
             });
             tbl += row + "</w:tr>";
           });
@@ -1878,7 +1919,7 @@ require([
 
       // Build document.xml with correct namespace for hyperlinks
       const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="1080"/></w:sectPr></w:body></w:document>`;
-      const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`;
+      const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:tabs><w:tab w:val="left" w:pos="${BODY_L}"/></w:tabs></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`;
       const ctXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`;
       const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
 
