@@ -457,7 +457,7 @@ require([
   "esri/Map",
   "esri/views/MapView",
   "esri/WebMap",
-  "esri/geometry/geometryEngine",
+  "esri/geometry/geometryEngineAsync",
   "esri/geometry/projection",
   "esri/geometry/SpatialReference",
   "esri/Graphic",
@@ -467,7 +467,7 @@ require([
   "esri/identity/IdentityManager",
 ], function(
   Map, MapView, WebMap,
-  geometryEngine, projection, SpatialReference,
+  geometryEngineAsync, projection, SpatialReference,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager
 ) {
@@ -602,7 +602,7 @@ require([
         shortName: "Bat Consultation Zone — Wiltshire",
         nameField: null, type: "bat" },
 
-      { title: "Trowbridge SPD",
+      { title: "Trowbirdge SPD",
         shortName: "Bat Consultation Zone — Trowbridge SPD",
         nameField: null, type: "bat" },
 
@@ -755,8 +755,8 @@ require([
 
     let bufGeom;
     try {
-      bufGeom = geometryEngine.geodesicBuffer(geom, bufferMetres, "meters");
-      console.log("Buffer created:", !!bufGeom);
+      bufGeom = await geometryEngineAsync.geodesicBuffer(geom, bufferMetres, "meters");
+      console.log("Geodesic buffer created:", !!bufGeom);
     } catch(e) {
       console.error("geodesicBuffer failed:", e);
     }
@@ -765,7 +765,7 @@ require([
     if (!bufGeom) {
       console.log("Trying planar buffer as fallback…");
       try {
-        bufGeom = geometryEngine.buffer(geom, bufferMetres, "meters");
+        bufGeom = await geometryEngineAsync.buffer(geom, bufferMetres, "meters");
         console.log("Planar buffer created:", !!bufGeom);
       } catch(e) {
         console.error("Planar buffer also failed:", e);
