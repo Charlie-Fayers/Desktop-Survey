@@ -479,7 +479,7 @@ require([
 
     portalUrl: "https://www.arcgis.com",
     webMapId:  "51a20531f9f44c4682f1bb246981ea86",
-    appId: "",
+    appId: "pduqao2ad2vWm62Z",
 
     // Matches the red line boundary layer by title
     redLineTitlePattern: /red.?line.?boundar/i,
@@ -606,12 +606,8 @@ require([
         shortName: "Bat Consultation Zone — Trowbridge SPD",
         nameField: null, type: "bat" },
 
-      { title: "North Somerset and",
-        shortName: "Bat Consultation Zone — North Somerset",
-        nameField: null, type: "bat" },
-
-      { title: "Mendips",
-        shortName: "Bat Consultation Zone — Mendips",
+      { title: "North Somerset and Mendips",
+        shortName: "Bat Consultation Zone — North Somerset and Mendips",
         nameField: null, type: "bat" },
 
       { title: "Hestercombe House",
@@ -638,10 +634,18 @@ require([
   };
   // ══════════════════════════════════════════════════════════════════════════
 
-  // ── Auth (optional) ───────────────────────────────────────────────────────
+  // ── Auth ─────────────────────────────────────────────────────────────────
   if (CONFIG.appId) {
-    const info = new OAuthInfo({ appId: CONFIG.appId, portalUrl: CONFIG.portalUrl, popup: false });
+    const info = new OAuthInfo({
+      appId: CONFIG.appId,
+      portalUrl: CONFIG.portalUrl,
+      popup: false,
+    });
     IdentityManager.registerOAuthInfos([info]);
+
+    // Check sign-in state; redirect to login if not authenticated
+    IdentityManager.checkSignInStatus(CONFIG.portalUrl + "/sharing")
+      .catch(() => IdentityManager.getCredential(CONFIG.portalUrl + "/sharing"));
   }
 
   // ── Map & View ────────────────────────────────────────────────────────────
