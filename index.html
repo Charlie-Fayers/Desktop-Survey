@@ -834,27 +834,27 @@ require([
       // ── Bat consultation zones (individual layers within group) ───────────
       { title: "Wiltshire",
         shortName: "Bat Consultation Zone — Wiltshire",
-        nameField: null, type: "bat" },
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
 
       { title: "Trowbirdge SPD",
         shortName: "Bat Consultation Zone — Trowbridge SPD",
-        nameField: null, type: "bat" },
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
 
       { title: "North Somerset and Mendips",
         shortName: "Bat Consultation Zone — North Somerset and Mendips",
-        nameField: null, type: "bat" },
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
 
       { title: "Hestercombe House",
         shortName: "Bat Consultation Zone — Hestercombe House",
-        nameField: null, type: "bat" },
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
 
       { title: "Exmoor and Quantocks",
         shortName: "Bat Consultation Zone — Exmoor and Quantocks",
-        nameField: null, type: "bat" },
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
 
       { title: "Mells Valley",
         shortName: "Bat Consultation Zone — Mells Valley",
-        nameField: null, type: "bat" },
+        nameField: null, bandField: "Consutatio_Band", type: "bat" },
 
       // ── Biodiversity records ──────────────────────────────────────────────
       { title: "iNaturalist Observations",
@@ -1177,35 +1177,69 @@ require([
       console.log(`Querying "${cfg.title}" → ${url}`);
 
       try {
-        // For groupByField layers (PHI etc.) we only need unique name values + count,
-        // not full geometry for every polygon — use a two-step approach:
-        // 1. Get true count, 2. Get unique name values (no geometry needed)
-        // For all other layers, paginate to get full feature list up to 2000.
-
         const PAGE = 500;
 
-        if (cfg.groupByField) {
-          // Step 1: get up to 2000 features for name values (no geometry)
-          // Do this first — also use as fallback count if returnCountOnly fails
-          const nameQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", outFields: [cfg.nameField], returnGeometry: false, num: 2000 });
-          const nameFs = await queryREST.executeQueryJSON(url, nameQ);
-          const rawNames = (nameFs.features || []).map(f => f.attributes[cfg.nameField]).filter(Boolean);
-          const unique = [...new Set(rawNames)];
-          console.log(`PHI name query: ${rawNames.length} features, ${unique.length} unique types`);
+        if (cfg.type === "bat") {
+          // Bat zones: query against the RLB itself (not the buffer)
+          // to determine if the site boundary falls within the zone
+          const batQ = new Query({
+            geometry: selectedGeom,
+            spatialRelationship: "intersects",
+            outFields: cfg.bandField ? [cfg.bandField] : ["*"],
+            returnGeometry: false,
+            num: 10,
+          });
+          const batFs = await queryREST.executeQueryJSON(url, batQ);
+          const batFeatures = batFs.features || [];
+          // Collect unique band values
+          const bands = [...new Set(
+            batFeatures.map(f => cfg.bandField ? f.attributes[cfg.bandField] : null).filter(Boolean)
+          )];
+          results[cfg.title] = {
+            status: batFeatures.length > 0 ? "found" : "absent",
+            count: batFeatures.length,
+            names: bands,
+            features: batFeatures,
+            cfg,
+          };
 
-          // Step 2: true count (with fallback to rawNames length)
-          let trueCount = rawNames.length;
+        } else if (cfg.groupByField) {
+          // PHI: fetch name + area fields, sum area per habitat type
+          const nameQ = new Query({
+            geometry: bufGeom, spatialRelationship: "intersects",
+            outFields: [cfg.nameField, "Shape__Area", "AreaHa"],
+            returnGeometry: false, num: 2000
+          });
+          const nameFs = await queryREST.executeQueryJSON(url, nameQ);
+          const features = nameFs.features || [];
+          console.log(`PHI query: ${features.length} features`);
+
+          // Sum area per habitat type (Shape__Area is in map units m², convert to ha)
+          const areaByType = {};
+          features.forEach(f => {
+            const type = f.attributes[cfg.nameField];
+            if (!type) return;
+            const rawArea = f.attributes["Shape__Area"] || f.attributes["AreaHa"];
+            const ha = f.attributes["AreaHa"]
+              ? parseFloat(f.attributes["AreaHa"])
+              : parseFloat(rawArea) / 10000;
+            areaByType[type] = (areaByType[type] || 0) + (isNaN(ha) ? 0 : ha);
+          });
+
+          // True count fallback
+          let trueCount = features.length;
           try {
-            const countQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" });
-            const cr = await queryREST.executeQueryJSON(url, countQ);
+            const cr = await queryREST.executeQueryJSON(url,
+              new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" }));
             if (cr.count > 0) trueCount = cr.count;
-          } catch(e) { console.log("PHI count query failed, using feature count:", trueCount); }
+          } catch(e) {}
 
           results[cfg.title] = {
-            status: trueCount > 0 ? "found" : (rawNames.length > 0 ? "found" : "absent"),
+            status: trueCount > 0 ? "found" : (features.length > 0 ? "found" : "absent"),
             count: trueCount,
-            names: unique,
-            _rawNames: rawNames,
+            names: Object.keys(areaByType),
+            _areaByType: areaByType,
+            _rawNames: features.map(f => f.attributes[cfg.nameField]).filter(Boolean),
             features: [],
             cfg,
           };
@@ -1385,11 +1419,11 @@ require([
       if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
     }
 
-    // NNR — HYPERLINK field already contains the full URL
+    // NNR — REF_CODE → SiteCitation (same pattern as SSSI)
     if (shortName.includes("nnr") || shortName.includes("national nature")) {
-      if (attrs["HYPERLINK"]) return attrs["HYPERLINK"];
       const code = attrs["REF_CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=S${code}`;
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteCitation.aspx?SiteCode=S${code}`;
+      if (attrs["HYPERLINK"] && attrs["HYPERLINK"].startsWith("http")) return attrs["HYPERLINK"];
     }
 
     // LNR — REF_CODE → SiteDetail
@@ -1480,7 +1514,9 @@ require([
         // Append designation type to name where the name field doesn't include it
         const sn = r.cfg.shortName.toLowerCase();
         if (sn.includes("ramsar") && !/ramsar/i.test(name)) {
-          name = `${name} Ramsar Site`;
+          name = `${name} RAMSAR`;
+        } else if ((sn.includes("nnr") || sn.includes("national nature")) && !/nnr|national nature reserve/i.test(name)) {
+          name = `${name} NNR`;
         } else if (sn.includes("spa") && !/spa|special protection/i.test(name)) {
           name = `${name} SPA`;
         } else if (sn.includes("sac") && !/sac|special area/i.test(name)) {
@@ -1559,18 +1595,14 @@ require([
         const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
 
         if (r.cfg.groupByField) {
-          // PHI — count parcels per unique habitat type
-          const byType = {};
-          (r.names || []).forEach(n => { byType[n] = (byType[n] || 0) + 1; });
-          // names array may have duplicates — recount from features if available
-          // Use the raw name list (may have dupes) for accurate per-type counts
-          const rawList = r._rawNames || r.names;
-          const typeCounts = {};
-          rawList.forEach(n => { typeCounts[n] = (typeCounts[n] || 0) + 1; });
-          const types = Object.entries(typeCounts).sort((a,b) => b[1] - a[1]);
-          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer, comprising the following habitat types:`);
-          html += `<ul>` + types.map(([type, count]) =>
-            `<li><strong>${type}</strong> — ${count} parcel${count !== 1 ? "s" : ""}</li>`
+          // PHI — show total area per habitat type
+          const areaByType = r._areaByType || {};
+          const types = Object.entries(areaByType).sort((a,b) => b[1] - a[1]);
+          const totalHa = Object.values(areaByType).reduce((s,v) => s+v, 0);
+          const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
+          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer (total area approximately ${totalHa.toFixed(2)} ha), comprising the following habitat types:`);
+          html += `<ul>` + types.map(([type, ha]) =>
+            `<li><strong>${type}</strong> — ${ha.toFixed(2)} ha</li>`
           ).join("") + `</ul>`;
         } else {
           const habRows = [];
@@ -1622,8 +1654,12 @@ require([
     const bats = found.filter(r => r.cfg.type === "bat");
     if (bats.length) {
       html += `<h2>Bat Consultation Zones</h2>`;
-      const zoneNames = bats.map(r => r.cfg.shortName.replace("Bat Consultation Zone — ", ""));
-      html += P(`The site falls within ${bats.length > 1 ? `${bats.length} Bat Consultation Zones` : "a Bat Consultation Zone"} (${zoneNames.join("; ")}), indicating that bat survey requirements should be considered as part of any ecological assessment.`);
+      const zoneLines = bats.map(r => {
+        const zoneName = r.cfg.shortName.replace("Bat Consultation Zone — ", "");
+        const bands = r.names.length ? ` (${r.names.join(", ")})` : "";
+        return `${zoneName}${bands}`;
+      });
+      html += P(`The red line boundary of the site falls within ${bats.length > 1 ? `${bats.length} Bat Consultation Zones` : "a Bat Consultation Zone"}: ${zoneLines.join("; ")}. Bat survey requirements should therefore be considered as part of any ecological assessment.`);
     }
 
     // ══ BIODIVERSITY RECORDS ════════════════════════════════════════════════
