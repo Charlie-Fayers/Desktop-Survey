@@ -5,12 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Automated Desk Study</title>
 
-  <!-- SheetJS — must load BEFORE ArcGIS/Dojo to avoid AMD conflict -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-
   <!-- ArcGIS Maps SDK 4.29 -->
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
   <script src="https://js.arcgis.com/4.29/"></script>
+
+  <!-- SheetJS loaded AFTER ArcGIS — uses esm build to avoid Dojo AMD conflict -->
+  <script>
+    // Inject SheetJS after Dojo has claimed the AMD loader
+    (function() {
+      var s = document.createElement("script");
+      s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+      s.onload = function() { console.log("SheetJS ready:", typeof XLSX); };
+      s.onerror = function() { console.warn("SheetJS failed to load"); };
+      document.head.appendChild(s);
+    })();
+  </script>
 
   <style>
     /* ── Tokens ──────────────────────────────────────────────────── */
@@ -958,7 +967,7 @@ require([
   let jnccLookup = null;   // null = not loaded yet; {} = loaded (may be empty on error)
   let jnccLoading = false;
 
-  const JNCC_URL = "https://data.jncc.gov.uk/data/478f7160-967b-4366-acdf-8941fd33850b/Taxon-designations-20231206.xlsx";
+  const JNCC_URL = "jncc.xlsx"; // hosted in same GitHub repo — no CORS issues
 
   // Reporting categories we want to flag
   const PROTECTED_CATEGORIES = [
@@ -976,56 +985,72 @@ require([
   async function loadJncc() {
     if (jnccLookup !== null || jnccLoading) return;
     jnccLoading = true;
+
+    // Wait for SheetJS to be available (it loads asynchronously after Dojo)
+    let waited = 0;
+    while (typeof XLSX === "undefined" && waited < 10000) {
+      await new Promise(r => setTimeout(r, 200));
+      waited += 200;
+    }
+    if (typeof XLSX === "undefined") {
+      console.warn("JNCC: SheetJS not available after 10s");
+      jnccLookup = {};
+      jnccLoading = false;
+      return;
+    }
+
     try {
+      console.log("JNCC: fetching spreadsheet…");
       const resp = await fetch(JNCC_URL);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const buf  = await resp.arrayBuffer();
+      console.log(`JNCC: downloaded ${(buf.byteLength/1024/1024).toFixed(1)}MB, parsing…`);
       const wb   = XLSX.read(buf, { type: "array" });
+      console.log("JNCC: sheets:", wb.SheetNames);
 
       // Find the Master List sheet
       const sheetName = wb.SheetNames.find(n => /master/i.test(n)) || wb.SheetNames[0];
+      console.log("JNCC: using sheet:", sheetName);
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+      console.log(`JNCC: ${rows.length} rows, sample cols:`, rows[0] ? Object.keys(rows[0]).join(", ") : "none");
 
       const lookup = {};
 
       rows.forEach(row => {
-        const repCat   = String(row["Reporting category"] || row["reporting category"] || "").trim();
-        const desig    = String(row["Designation"] || row["designation"] || "").trim().toLowerCase();
-        const taxName  = String(row["Recommended taxon name"] || "").trim().toLowerCase();
-        const comName  = String(row["Common name"] || "").trim().toLowerCase();
-        const category = String(row["Category"] || row["category"] || "").trim();
-        const taxGroup = String(row["Taxon group"] || row["taxon group"] || "").trim();
+        // Try multiple possible column name variations
+        const repCat  = String(row["Reporting category"] || row["reporting category"] || row["RepCat"] || "").trim();
+        const desig   = String(row["Designation"] || row["designation"] || row["Status"] || "").trim().toLowerCase();
+        const taxName = String(row["Recommended taxon name"] || row["Taxon name"] || row["taxon name"] || "").trim().toLowerCase();
+        const comName = String(row["Common name"] || row["common name"] || row["CommonName"] || "").trim().toLowerCase();
+        const taxGroup= String(row["Taxon group"] || row["taxon group"] || row["TaxonGroup"] || row["Kingdom"] || "").trim();
 
-        // Check if this row matches a protected category
         const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
-
-        // Check if this is a Red List entry that isn't LC/NE/NA
-        const isRedList = /red list/i.test(repCat) && !REDLIST_EXCLUDE.some(x => desig.startsWith(x));
+        const isRedList   = /red list/i.test(repCat) && !REDLIST_EXCLUDE.some(x => desig.startsWith(x));
 
         if (!isProtected && !isRedList) return;
 
         const designLabel = isRedList
-          ? `Red List (${row["Designation"] || ""})`.trim()
+          ? `Red List (${row["Designation"] || row["Status"] || ""})`
           : repCat.replace("Habitats and Species Regulations 2017", "Hab. Regs.")
-                  .replace("Wildlife and Countryside Act 1981", "WCA")
+                  .replace("Wildlife and Countryside Act 1981", "WCA 1981")
                   .replace("Protection of Badgers Act 1992", "Badgers Act")
                   .replace("NERC Act S41 (England)", "NERC S41")
                   .replace("NERC Act S42 (Wales)", "NERC S42")
                   .replace("Habitats Directive", "Hab. Dir.")
                   .replace("Birds Directive", "Birds Dir.");
 
-        // Add to lookup under both scientific and common name
         [taxName, comName].filter(Boolean).forEach(key => {
-          if (!lookup[key]) lookup[key] = { category, taxonGroup: taxGroup, designations: new Set() };
-          lookup[key].designations.add(designLabel);
+          if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
+          lookup[key].designations.add(designLabel.trim());
         });
       });
 
-      // Convert Sets to sorted arrays
       Object.values(lookup).forEach(v => { v.designations = [...v.designations].sort(); });
       jnccLookup = lookup;
       console.log(`JNCC lookup loaded: ${Object.keys(lookup).length} protected taxa`);
+
     } catch(e) {
-      console.warn("JNCC lookup failed to load:", e.message);
+      console.warn("JNCC lookup failed:", e.message);
       jnccLookup = {};
     }
     jnccLoading = false;
@@ -1945,17 +1970,14 @@ require([
         }
         html += `<p style="font-size:10px;color:#666;font-style:italic">Species protection data: JNCC Conservation Designations for UK Taxa (December 2023), OGL v3.</p>`;
       } else if (jnccLookup === null) {
-        html += P(`${ph("JNCC species protection lookup is still loading — re-run the desk study once the page has fully loaded to include protected species cross-referencing.")}`);
+        html += P(`${ph("JNCC species protection data is still loading — re-run the desk study in a moment to include protected species cross-referencing.")}`);
       } else {
-        // Lookup failed — fall back to listing all species
-        html += P(`Protected species cross-referencing was unavailable. All recorded species are listed below.`);
+        // jnccLookup loaded but empty (fetch/parse failed) — fall back to listing all species
+        html += P(`Protected species cross-referencing against the JNCC Conservation Designations list was unavailable (the spreadsheet may have failed to load — check the browser console for details). All recorded species are listed below for manual review.`);
         records.forEach(r => {
           const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
           if (uniqueNames.length) {
-            const listed = uniqueNames.slice(0, r.cfg.maxList || 10);
-            const rem = uniqueNames.length - listed.length;
-            html += `<ul>` + listed.map(n => `<li>${n}</li>`).join("") +
-              (rem > 0 ? `<li><em>…and ${rem} further species</em></li>` : "") + `</ul>`;
+            html += `<ul>` + uniqueNames.map(n => `<li>${n}</li>`).join("") + `</ul>`;
           }
         });
       }
