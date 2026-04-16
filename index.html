@@ -940,11 +940,11 @@ require([
       // ── Biodiversity records ──────────────────────────────────────────────
       { title: "iNaturalist Observations",
         shortName: "iNaturalist biodiversity observations",
-        nameField: "common_name", type: "records", maxList: 5 },
+        nameField: "common_name", latinField: "scientific_name", type: "records", maxList: 5 },
 
       { title: "C&W In-house Records",
         shortName: "C&W in-house biodiversity records",
-        nameField: "Common_Name", type: "records", maxList: 5 },
+        nameField: "Common_Name", latinField: "Latin_Name", type: "records", maxList: 5 },
     ],
   };
   // ══════════════════════════════════════════════════════════════════════════
@@ -994,7 +994,7 @@ require([
   ];
 
   // Birds of Conservation Concern 5 — include Red and Amber listed birds
-  const BOCC5_MATCH = /birds of conservation concern 5|bocc5/i;
+  const BOCC5_MATCH = /birds of conservation concern 5|bocc5|bocc 5/i;
   const BOCC5_STATUSES = ["red", "amber"];
 
   function setJnccStatus(msg, type) {
@@ -1041,80 +1041,173 @@ require([
       const sheetName = wb.SheetNames.find(n => /master/i.test(n)) || wb.SheetNames[0];
       if (!sheetName) throw new Error("No sheet found in workbook");
 
-      // The sheet has introductory text rows before the actual data header.
-      // Read as raw array, find the row that contains known column headers,
-      // then re-parse from that row onward.
+      // Show all sheet names so we can confirm which one to use
+      setJnccStatus(`⏳ Sheets found: ${wb.SheetNames.join(", ")}`, "loading");
+      await new Promise(r => setTimeout(r, 1500)); // brief pause so user can read it
+
+      // Prefer the Summary sheet which has one row per taxon with all designations as columns
+      const sheetName = wb.SheetNames.find(n => /summary/i.test(n)) ||
+                        wb.SheetNames.find(n => /master/i.test(n)) ||
+                        wb.SheetNames[0];
+      setJnccStatus(`⏳ Using sheet: "${sheetName}"`, "loading");
+      await new Promise(r => setTimeout(r, 1000));
+
       const raw = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" });
 
-      // Find the row index containing the actual column headers
+      // Find the header row (scan first 20 rows)
       let headerRowIdx = -1;
       for (let i = 0; i < Math.min(raw.length, 20); i++) {
         const rowStr = raw[i].join("|").toLowerCase();
-        if (rowStr.includes("taxon") && rowStr.includes("designation") && rowStr.includes("reporting")) {
+        // Summary sheet: look for taxon + some designation column
+        // Master sheet: look for taxon + designation + reporting
+        if ((rowStr.includes("taxon") || rowStr.includes("recommended")) &&
+            (rowStr.includes("wca") || rowStr.includes("designation") || rowStr.includes("bocc") || rowStr.includes("habitats"))) {
           headerRowIdx = i;
           break;
         }
       }
-      if (headerRowIdx === -1) throw new Error(`Could not find header row. First rows: ${raw.slice(0,3).map(r=>r.slice(0,3).join(",")).join(" / ")}`);
+      if (headerRowIdx === -1) throw new Error(`Header not found. First 3 rows: ${raw.slice(0,3).map(r=>r.slice(0,4).join(",")).join(" / ")}`);
 
-      // Re-parse using the found header row
-      const headers = raw[headerRowIdx];
+      const headers = raw[headerRowIdx].map(h => String(h).trim());
       const rows = raw.slice(headerRowIdx + 1).map(r => {
         const obj = {};
-        headers.forEach((h, i) => { obj[String(h).trim()] = r[i] !== undefined ? r[i] : ""; });
+        headers.forEach((h, i) => { obj[h] = r[i] !== undefined ? r[i] : ""; });
         return obj;
       }).filter(r => Object.values(r).some(v => v !== ""));
 
-      setJnccStatus(`⏳ Building lookup — ${rows.length} rows, headers: ${headers.slice(0,5).join(" | ")}`, "loading");
+      // Show first 8 column names so we can see the structure
+      setJnccStatus(`⏳ ${rows.length} rows. ALL cols: ${headers.join(" | ")}`, "loading");
+      await new Promise(r => setTimeout(r, 8000)); // long pause so all cols can be read
 
       const lookup = {};
-      rows.forEach(row => {
-        const repCat  = String(row["Reporting category"] || row["reporting category"] || row["RepCat"] || "").trim();
-        const desig   = String(row["Designation"] || row["designation"] || row["Status"] || "").trim().toLowerCase();
-        const taxName = String(row["Recommended taxon name"] || row["Taxon name"] || row["taxon name"] || "").trim().toLowerCase();
-        const comName = String(row["Common name"] || row["common name"] || row["CommonName"] || "").trim().toLowerCase();
-        const taxGroup= String(row["Taxon group"] || row["taxon group"] || row["TaxonGroup"] || row["Kingdom"] || "").trim();
+      const isSummarySheet = /summary/i.test(sheetName);
 
-        const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
-        // BoCC5 Red and Amber listed birds
-        const isBoCC5 = BOCC5_MATCH.test(repCat) &&
-                        BOCC5_STATUSES.some(s => desig.trim().toLowerCase() === s);
+      if (isSummarySheet) {
+        // Summary sheet: one row per taxon, designation columns contain values like Y/blank/Red/Amber
+        // Latin name column is typically "Recommended taxon name" or similar
+        // We need to find: latin name col, common name col, taxon group col,
+        // then check each designation column
 
-        if (!isProtected && !isBoCC5) return;
+        // Identify key columns by scanning header names
+        const latinCol   = headers.find(h => /recommended taxon|latin|scientific/i.test(h));
+        const commonCol  = headers.find(h => /common name/i.test(h));
+        const groupCol   = headers.find(h => /taxon group|kingdom/i.test(h));
 
-        // Build label — include schedule/annex detail where available
-        let designLabel;
-        const rawDesig = String(row["Designation"] || row["Status"] || "").trim();
-        if (isBoCC5) {
-          designLabel = `BoCC5 ${desig.charAt(0).toUpperCase() + desig.slice(1).toLowerCase()} List`;
-        } else if (repCat.includes("Wildlife and Countryside Act 1981")) {
-          designLabel = rawDesig ? `WCA 1981 ${rawDesig}` : "WCA 1981";
-        } else if (repCat.includes("Conservation of Habitats and Species Regulations")) {
-          designLabel = rawDesig ? `Hab. Regs. ${rawDesig}` : "Hab. Regs.";
-        } else if (repCat.includes("Habitats Directive")) {
-          designLabel = rawDesig ? `Hab. Dir. ${rawDesig}` : "Hab. Dir.";
-        } else {
-          designLabel = repCat
-            .replace("Protection of Badgers Act 1992", "Badgers Act 1992")
-            .replace("NERC Act S41 (England)", "NERC S41")
-            .replace("NERC Act S42 (Wales)", "NERC S42");
-        }
+        // Show which name columns were found
+        setJnccStatus(`⏳ Name cols: latin="${latinCol}" common="${commonCol}" group="${groupCol}"`, "loading");
+        await new Promise(r => setTimeout(r, 3000));
 
-        [taxName, comName].filter(Boolean).forEach(key => {
-          if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
-          lookup[key].designations.add(designLabel.trim());
+        // Designation columns — identify by known patterns
+        // Show a sample row so we can see what values look like
+        const sampleRow = rows[0] ? JSON.stringify(rows[0]).slice(0, 300) : "none";
+        setJnccStatus(`⏳ Sample row: ${sampleRow}`, "loading");
+        await new Promise(r => setTimeout(r, 5000));
+
+        rows.forEach(row => {
+          const latinName = String(row[latinCol] || "").trim().toLowerCase();
+          const comName   = String(row[commonCol] || "").trim().toLowerCase();
+          const taxGroup  = String(row[groupCol]  || "").trim();
+          if (!latinName) return;
+
+          const designations = new Set();
+
+          // Check every header to see if it looks like a designation column
+          headers.forEach(h => {
+            const val = String(row[h] || "").trim();
+            if (!val || val === "0") return;
+
+            const hl = h.toLowerCase();
+
+            // WCA schedules
+            if (/wca|wildlife.*countryside/i.test(h)) {
+              designations.add(`WCA 1981 ${h.replace(/wca\s*/i,"").trim() || val}`);
+            }
+            // Habitat Regulations
+            else if (/hab.*reg|conservation.*habitat.*regulation/i.test(h)) {
+              designations.add(`Hab. Regs. ${h.replace(/hab.*regs?\s*/i,"").trim() || val}`);
+            }
+            // Habitats Directive
+            else if (/hab.*dir|habitats directive/i.test(h)) {
+              designations.add(`Hab. Dir. ${h.replace(/hab.*dir\s*/i,"").trim() || val}`);
+            }
+            // BoCC5 — value is Red or Amber
+            else if (/bocc5|bocc 5|birds.*conservation.*concern.*5/i.test(h)) {
+              if (/red|amber/i.test(val)) {
+                designations.add(`BoCC5 ${val.charAt(0).toUpperCase() + val.slice(1).toLowerCase()} List`);
+              }
+            }
+            // NERC S41/S42
+            else if (/nerc.*s41|s41.*england|principal.*england/i.test(h)) {
+              if (val && val !== "0") designations.add("NERC S41");
+            }
+            else if (/nerc.*s42|s42.*wales|principal.*wales/i.test(h)) {
+              if (val && val !== "0") designations.add("NERC S42");
+            }
+            // Badgers Act
+            else if (/badger/i.test(h)) {
+              if (val && val !== "0") designations.add("Badgers Act 1992");
+            }
+          });
+
+          if (designations.size === 0) return;
+
+          [latinName, comName].filter(Boolean).forEach(key => {
+            if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
+            designations.forEach(d => lookup[key].designations.add(d));
+          });
         });
-      });
+
+      } else {
+        // Master List sheet: one row per taxon-designation combination
+        rows.forEach(row => {
+          const repCat  = String(row["Reporting category"] || row["reporting category"] || "").trim();
+          const desig   = String(row["Designation"] || row["designation"] || row["Status"] || "").trim().toLowerCase();
+          const taxName = String(row["Recommended taxon name"] || row["Taxon name"] || "").trim().toLowerCase();
+          const comName = String(row["Common name"] || "").trim().toLowerCase();
+          const taxGroup= String(row["Taxon group"] || "").trim();
+
+          const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
+          const isBoCC5 = BOCC5_MATCH.test(repCat) && /red|amber/i.test(desig);
+          if (!isProtected && !isBoCC5) return;
+
+          const rawDesig = String(row["Designation"] || row["Status"] || "").trim();
+          let designLabel;
+          if (isBoCC5) {
+            designLabel = `BoCC5 ${desig.charAt(0).toUpperCase() + desig.slice(1).toLowerCase()} List`;
+          } else if (repCat.includes("Wildlife and Countryside Act 1981")) {
+            designLabel = rawDesig ? `WCA 1981 ${rawDesig}` : "WCA 1981";
+          } else if (repCat.includes("Conservation of Habitats and Species Regulations")) {
+            designLabel = rawDesig ? `Hab. Regs. ${rawDesig}` : "Hab. Regs.";
+          } else if (repCat.includes("Habitats Directive")) {
+            designLabel = rawDesig ? `Hab. Dir. ${rawDesig}` : "Hab. Dir.";
+          } else {
+            designLabel = repCat
+              .replace("Protection of Badgers Act 1992", "Badgers Act 1992")
+              .replace("NERC Act S41 (England)", "NERC S41")
+              .replace("NERC Act S42 (Wales)", "NERC S42");
+          }
+
+          [taxName, comName].filter(Boolean).forEach(key => {
+            if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
+            lookup[key].designations.add(designLabel.trim());
+          });
+        });
+      }
 
       Object.values(lookup).forEach(v => { v.designations = [...v.designations].sort(); });
       jnccLookup = lookup;
       const n = Object.keys(lookup).length;
+
+      // Quick sanity check — find any BoCC5 entries to confirm matching worked
+      const bocc5Sample = Object.entries(lookup)
+        .filter(([k,v]) => v.designations.some(d => d.includes("BoCC5")))
+        .slice(0,3).map(([k]) => k).join(", ");
+
       if (n === 0) {
-        // Show first row to diagnose column name mismatch
         const sample = rows[0] ? JSON.stringify(rows[0]).slice(0, 200) : "no rows";
         setJnccStatus(`✗ 0 taxa matched. First row: ${sample}`, "error");
       } else {
-        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa loaded`, "ok");
+        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa. BoCC5 sample: ${bocc5Sample || "none found"}`, "ok");
       }
 
     } catch(e) {
@@ -2053,52 +2146,55 @@ require([
     if (records.length) {
       html += `<h2>Biodiversity Records</h2>`;
 
-      // Merge all species names across record sources
-      const allNames = [];
+      // Merge species from all record sources — store {common, latin} pairs
+      const allSpecies = [];
+      const seenCommon = new Set();
       records.forEach(r => {
         const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
-        const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
         html += P(`A total of ${countLabel} ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} retrieved within the ${rBuf(r)} buffer.`);
-        uniqueNames.forEach(n => { if (!allNames.includes(n)) allNames.push(n); });
+        r.features.forEach(f => {
+          const common = String(f.attributes[r.cfg.nameField] || "").trim();
+          const latin  = r.cfg.latinField ? String(f.attributes[r.cfg.latinField] || "").trim() : "";
+          if (!common || seenCommon.has(common)) return;
+          seenCommon.add(common);
+          allSpecies.push({ common, latin });
+        });
       });
 
-      // Cross-reference against JNCC if lookup is available
+      // Cross-reference against JNCC — try Latin name first, fall back to common name
       if (jnccLookup && Object.keys(jnccLookup).length > 0) {
-        // Group protected species by taxon category
         const byCategory = {};
-        allNames.forEach(name => {
-          const match = lookupSpecies(name);
+        allSpecies.forEach(({ common, latin }) => {
+          const match = (latin && lookupSpecies(latin)) || lookupSpecies(common);
           if (!match) return;
-          const cat = match.category || match.taxonGroup || "Other";
+          const cat = match.taxonGroup || "Other";
           if (!byCategory[cat]) byCategory[cat] = [];
-          byCategory[cat].push({ name, designations: match.designations });
+          // Display as "Common name (Latin name)" if both available
+          const displayName = latin ? `${common} <em>(${latin})</em>` : common;
+          byCategory[cat].push({ displayName, designations: match.designations });
         });
 
         const protectedCount = Object.values(byCategory).reduce((s,v) => s+v.length, 0);
-        const totalNames = allNames.length;
 
         if (protectedCount > 0) {
-          html += P(`Of the ${totalNames} species recorded, ${protectedCount} ${protectedCount !== 1 ? "are" : "is"} listed under UK or international conservation legislation or Red Lists. These are summarised below by taxonomic group.`);
+          html += P(`Of the ${allSpecies.length} species recorded, ${protectedCount} ${protectedCount !== 1 ? "are" : "is"} listed under UK or international conservation legislation or Red Lists. These are summarised below by taxonomic group.`);
           Object.entries(byCategory).sort((a,b) => a[0].localeCompare(b[0])).forEach(([cat, spp]) => {
             html += `<p><strong>${cat.charAt(0).toUpperCase() + cat.slice(1)}</strong></p>`;
             html += `<ul>` + spp.map(s =>
-              `<li><strong>${s.name}</strong> — ${s.designations.join("; ")}</li>`
+              `<li>${s.displayName} — ${s.designations.join("; ")}</li>`
             ).join("") + `</ul>`;
           });
         } else {
-          html += P(`None of the ${totalNames} species recorded were identified on the JNCC Conservation Designations list under the selected legislation. This does not preclude the presence of protected species within the wider site area.`);
+          html += P(`None of the ${allSpecies.length} species recorded were identified on the JNCC Conservation Designations list under the selected legislation. This does not preclude the presence of protected species within the wider site area.`);
         }
         html += `<p style="font-size:10px;color:#666;font-style:italic">Species protection data: JNCC Conservation Designations for UK Taxa (December 2023), OGL v3.</p>`;
       } else if (jnccLookup === null) {
         html += P(`${ph("JNCC species protection data is still loading — re-run the desk study in a moment to include protected species cross-referencing.")}`);
       } else {
-        // jnccLookup loaded but empty (fetch/parse failed) — fall back to listing all species
-        html += P(`Protected species cross-referencing against the JNCC Conservation Designations list was unavailable (the spreadsheet may have failed to load — check the browser console for details). All recorded species are listed below for manual review.`);
+        html += P(`Protected species cross-referencing against the JNCC Conservation Designations list was unavailable. All recorded species are listed below for manual review.`);
         records.forEach(r => {
           const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
-          if (uniqueNames.length) {
-            html += `<ul>` + uniqueNames.map(n => `<li>${n}</li>`).join("") + `</ul>`;
-          }
+          if (uniqueNames.length) html += `<ul>` + uniqueNames.map(n => `<li>${n}</li>`).join("") + `</ul>`;
         });
       }
     }
