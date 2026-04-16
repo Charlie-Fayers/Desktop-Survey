@@ -1,130 +1,195 @@
-# Ecological Screening Tool — Setup Guide
+# Clarkson & Woods — Automated Desk Study Tool
+**Version 0.1**
 
-## What it does
-
-1. User clicks **Select boundary** and then clicks a red line boundary feature on the map
-2. A geodesic buffer is drawn at the chosen distance (default 2 km)
-3. The tool queries every configured ecological layer in parallel using `queryFeatures()`
-4. A plain-English paragraph is generated summarising all intersecting features, ready to paste into a report
+A browser-based ecological desk study tool built on the ArcGIS Maps SDK for JavaScript. Users select a red line boundary on a web map, apply a buffer, and the tool automatically interrogates national open access ecological datasets to produce a structured report ready for use in an Ecological Impact Assessment or Preliminary Ecological Appraisal.
 
 ---
 
-## Prerequisites
+## Live URL
 
-- ArcGIS Experience Builder 1.11 or later (Developer Edition or Online)
-- A web map containing:
-  - One or more **red line boundary** layers (the tool auto-detects layers whose title matches `red line`, `site boundary`, or `application boundary`)
-  - The national open access layers listed below — add only the ones you have access to
-
----
-
-## Installation (Experience Builder Developer Edition)
-
-1. Copy the `ecological-screening-tool/` folder into:
-   ```
-   client/your-extensions/widgets/
-   ```
-2. Restart the Experience Builder dev server
-3. The widget will appear in the widget panel under **Custom Widgets**
-4. Add it to your experience and connect it to your map widget via **Select map**
-
----
-
-## Layer name matching
-
-The tool matches layers by their **title** in the web map. Open `widget.js` and edit the
-`ECOLOGICAL_LAYERS` array at the top of the file to match your exact layer titles:
-
-```js
-const ECOLOGICAL_LAYERS = [
-  {
-    title: "Sites of Special Scientific Interest (SSSI)",  // ← must match your layer title exactly
-    shortName: "Sites of Special Scientific Interest (SSSIs)",
-    nameField: "SSSI_NAME",   // ← attribute field containing the designation name
-    type: "statutory",
-  },
-  // ... add or remove layers as needed
-];
+```
+https://charlie-fayers.github.io/Desktop-Survey/
 ```
 
-### Field names for common national datasets
+---
 
-| Dataset | Typical title in ArcGIS Online | Name field |
-|---|---|---|
-| SSSI (England) | Sites of Special Scientific Interest (SSSI) | `SSSI_NAME` |
-| SAC (GB) | Special Areas of Conservation (SAC) | `SAC_NAME` |
-| SPA (GB) | Special Protection Areas (SPA) | `SPA_NAME` |
-| Ramsar (GB) | Ramsar Sites | `RAMSAR_NAME` |
-| LNR (England) | Local Nature Reserves (LNR) | `LNR_NAME` |
-| Ancient Woodland (England) | Ancient Woodland Inventory | `NAME` |
-| Priority Habitat Inventory | Priority Habitat Inventory (PHI) | `Main_Habit` |
-| iNaturalist | iNaturalist Research Grade Observations | `species_name` |
+## How to use
 
-Set `groupByField: true` for the Priority Habitat layer so the report lists habitat *types* rather than individual polygons.
+1. **Search** — type a site name or place name into the search bar at the top of the map. Red line boundary features can be searched by their `Label` field and will auto-select when chosen. Place names and postcodes are geocoded via the ArcGIS World Geocoder.
+
+2. **Set buffer distance** — choose a buffer distance using the preset buttons (0.5, 2, 5, 10 km) or type a custom value. Default is 2 km.
+
+3. **Select boundary** — click **Select red line boundary** then click a red line boundary polygon on the map, or use the search to auto-select one.
+
+4. **Run Desk Study** — click **Run Desk Study**. The tool will:
+   - Create a geodesic buffer around the selected boundary
+   - Query all configured ecological layers against the buffer
+   - Calculate distance and direction from the boundary to each intersecting feature
+   - Generate a structured report
+
+5. **Export to Word** — click **Export to Word** to download a `.docx` file formatted in Century Gothic (9pt body, 8pt tables) with green-headed tables, alternating row shading, and placeholder text highlighted for manual completion.
 
 ---
 
-## Buffer behaviour
+## Layers queried
 
-- Buffer is applied using **`geometryEngine.geodesicBuffer()`** so it is accurate for large areas
-- The boundary geometry is projected to **British National Grid (WKID 27700)** before buffering to ensure metric accuracy
-- The buffer displays on the map as a dashed green outline; it is removed on **Reset**
+### England — Statutory Designations
+| Layer | Name field |
+|---|---|
+| Sites of Special Scientific Interest (England) | NAME |
+| Special Areas of Conservation (England) | SAC_NAME |
+| Special Protection Areas (England) | NAME |
+| Ramsar (England) | NAME |
+| National Nature Reserves (England) | NAME |
+| Local Nature Reserves (England) | NAME |
+| Areas of Outstanding Natural Beauty (England) | NAME |
+| National Parks (England) | NAME |
+
+### England — Habitats
+| Layer | Field |
+|---|---|
+| Ancient Woodland (England) | NAME |
+| Priority Habitats Inventory (England) | MainHabs (grouped by habitat type) |
+
+### England — Watercourses
+| Layer |
+|---|
+| Priority River Habitat — Rivers (England) |
+| Priority River Habitat — Headwater Areas (England) |
+| Chalk Rivers (England) |
+| EA Statutory Rivers |
+
+### Bat Consultation Zones
+| Layer |
+|---|
+| Wiltshire |
+| Trowbridge SPD |
+| North Somerset and Mendips |
+| Hestercombe House |
+| Exmoor and Quantocks |
+| Mells Valley |
+
+### Biodiversity Records
+| Layer | Field |
+|---|---|
+| iNaturalist Observations | common_name |
+| C&W In-house Records | Common_Name |
+
+### Wales (WMS — display only, not queryable)
+Wales layers (SSSI, SAC, SPA, RAMSAR, NNR, LNR, AONB, National Park, Ancient Woodland, Priority Habitats) are shown on the map but cannot be queried programmatically as they are served as WMS. They are included in the Data Limitations section of the report only when the site is detected as being within Wales.
 
 ---
 
-## Report output format
+## Report structure
 
-The generated paragraph follows this structure:
+The generated report follows standard ecological appraisal structure:
 
-> A 2 km buffer was applied to the red line boundary of the application site and interrogated against national open access ecological datasets on [date].
-> The following statutory nature conservation designations were recorded within the 2 km buffer: [count] Sites of Special Scientific Interest ('Name A', 'Name B') and [count] Special Areas of Conservation ('Name C').
-> In terms of designated habitats, [count] Priority Habitat Inventory parcels encompassing 'Lowland meadows', 'Lowland calcareous grassland' and 3 others were identified; [count] parcels of ancient woodland were recorded ('Name D', 'Name E').
-> A total of [count] iNaturalist biodiversity records were retrieved within the buffer area, including records of 'Species A', 'Species B' and 3 others.
-> No Ramsar wetland sites, Local Nature Reserves (LNRs) or Special Protection Areas (SPAs) were identified within the search area.
+```
+Desk Study Findings
+  Designated Sites
+    Statutory Designated Sites        — Table 1 with size, distance, direction, importance
+    Local and Non-Statutory Sites     — Table 2 (LNRs)
+    Local Wildlife Sites              — placeholder
+  Habitats                            — paragraphs with bullet lists
+  Watercourses and River Habitats
+  Bat Consultation Zones
+  Biodiversity Records                — species lists
+  Local BAP                           — placeholder
+  Planning Policy                     — placeholder
+  Data Limitations                    — WMS and unqueryable layers (England only if site not in Wales)
+```
 
----
+Importance is classified automatically:
+- **International** — SAC, SPA, Ramsar
+- **National** — SSSI, NNR, National Park, AONB
+- **Local** — LNR
 
-## Extending the tool
+Each SSSI includes a direct link to its Natural England citation page (`designatedsites.naturalengland.org.uk`) so the Reason for Designation can be retrieved quickly.
 
-### Adding more layers
+Distance and direction are calculated from the nearest point of each intersecting feature to the red line boundary centroid. Features within 50m are described as "within or adjoining the site".
 
-Add entries to the `ECOLOGICAL_LAYERS` array. Supported `type` values control which
-paragraph section the layer is reported under:
-
-- `"statutory"` — statutory designations paragraph
-- `"habitat"` — habitats paragraph  
-- `"records"` — biodiversity records paragraph
-
-### Adding distance to nearest feature
-
-To report the distance from the boundary to each designation (rather than just intersection),
-change the query's `spatialRelationship` to `"intersects"` and post-process the results
-using `geometryEngine.distance()` on each returned feature.
-
-### Exporting to Word / PDF
-
-Connect the `reportText` state to a download function using the
-[FileSaver.js](https://github.com/eligrey/FileSaver.js/) library (already available in ExB)
-to export as `.txt`, or use the `docx` npm package to produce a formatted Word paragraph.
+Feature counts for large datasets (Priority Habitat Inventory, EA Statutory Rivers, iNaturalist) are retrieved using `returnCountOnly` queries to give accurate totals. All other layers paginate in batches of 500 up to 2,000 features.
 
 ---
 
-## Web AppBuilder adaptation
+## Technical details
 
-If you are using **Web AppBuilder** (Classic) rather than Experience Builder, the same
-logic applies but the component structure changes:
+- **ArcGIS Maps SDK for JavaScript** 4.29 (loaded from Esri CDN)
+- **Authentication** — OAuth 2.0 via ArcGIS Online App ID `pduqao2ad2vWm62Z` (QGIS Portal registration). Redirect URI must include `https://charlie-fayers.github.io/Desktop-Survey/`
+- **Web Map ID** — `51a20531f9f44c4682f1bb246981ea86`
+- **Buffer** — geodesic buffer using `geometryEngineAsync.geodesicBuffer()` in Web Mercator (WKID 102100)
+- **Word export** — pure vanilla JavaScript OOXML builder using the native browser Compression Streams API (`CompressionStream("deflate-raw")`). No external libraries — avoids AMD conflicts with the ArcGIS/Dojo module system.
+- **Hosted on** — GitHub Pages (`https://charlie-fayers.github.io/Desktop-Survey/`)
 
-1. Create a WAB custom widget folder with `Widget.js`, `Widget.html`, `manifest.json`
-2. Replace the React JSX with Dijit/AMD equivalents
-3. Use `esri/tasks/QueryTask` and `esri/tasks/support/Query` directly (already AMD-compatible)
-4. The `buildReportParagraph()` function is framework-agnostic and can be copied as-is
+---
+
+## Deployment
+
+The tool is a single `index.html` file. To update:
+
+1. Download the latest `index.html`
+2. Go to `https://github.com/Charlie-Fayers/Desktop-Survey`
+3. Click `index.html` → pencil icon (Edit) → select all → paste new content → **Commit changes**
+
+Or drag and drop via **Add file → Upload files** and commit.
+
+GitHub Pages republishes within ~60 seconds. Hard refresh (`Ctrl+Shift+R`) to clear the browser cache.
+
+---
+
+## Configuration
+
+All configurable settings are in the `CONFIG` block at the top of the `<script>` section in `index.html`:
+
+```javascript
+const CONFIG = {
+  portalUrl:           "https://www.arcgis.com",
+  webMapId:            "51a20531f9f44c4682f1bb246981ea86",
+  appId:               "pduqao2ad2vWm62Z",
+  redLineTitlePattern: /red.?line.?boundar/i,
+  layers: [ ... ]
+};
+```
+
+### Adding a new layer
+
+Add an entry to `CONFIG.layers`:
+
+```javascript
+{ title: "Exact layer title from web map",
+  shortName: "Text used in the report",
+  nameField: "FIELD_NAME",      // attribute field for feature names; null = count only
+  type: "statutory",            // statutory | habitat | river | bat | records
+  maxList: 4,                   // max names listed before "and N others"
+  groupByField: true,           // optional: group by unique nameField values (e.g. PHI)
+  wms: true }                   // optional: mark as WMS (display only, not queried)
+```
+
+### Changing the buffer presets
+
+Edit the preset buttons in the HTML:
+
+```html
+<button class="preset-btn" data-km="0.5">0.5 km</button>
+<button class="preset-btn active" data-km="2">2 km</button>
+<button class="preset-btn" data-km="5">5 km</button>
+<button class="preset-btn" data-km="10">10 km</button>
+```
 
 ---
 
 ## Known limitations
 
-- The tool queries **feature services** only; map image layers (dynamic) are not supported.
-  Convert any relevant dynamic layers to hosted feature layers in your portal first.
-- Maximum of 200 features returned per layer query. For very large datasets (e.g. PHI),
-  increase `num` in the Query or implement pagination.
-- Projection to BNG requires the geometry service to be configured in your ArcGIS portal.
+- **Wales layers** are WMS services and cannot be queried via the REST API. They are shown on the map and noted in the report only when the site is detected as being in Wales. Wales detection uses an approximate bounding box — sites close to the England/Wales border should have Welsh layer results checked manually in the map.
+- **Local Wildlife Sites (LWS)** are not available as open access data. The report includes a placeholder directing the ecologist to check with the local LERC.
+- **EA Statutory Rivers** is hosted on a third-party ArcGIS server which may have CORS restrictions on some networks.
+- **Feature counts** are paginated up to 2,000 features per layer. Where this cap is reached, the true count is retrieved via a separate `returnCountOnly` query and reported as "at least N".
+- **Reason for Designation** cannot be retrieved automatically (no public API from Natural England). Each statutory designation in Table 1 links to its NE citation page for manual lookup.
+
+---
+
+## Version history
+
+| Version | Date | Notes |
+|---|---|---|
+| 0.1 | April 2026 | Initial release |
