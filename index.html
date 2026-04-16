@@ -1779,8 +1779,9 @@ require([
         if (layer.layerId !== undefined && layer.layerId !== null) url += `/${layer.layerId}`;
         console.log("Searching RLB at:", url);
 
+        const safe = query.replace(/'/g, "''");
         const q = new Query({
-          where: `UPPER(Label) LIKE UPPER('%${query.replace(/'/g,"''")}%') OR UPPER(Name) LIKE UPPER('%${query.replace(/'/g,"''")}%')`,
+          where: `Label LIKE '%${safe}%'`,
           outFields: ["*"],
           returnGeometry: true,
           num: 8,
@@ -1789,10 +1790,7 @@ require([
           const fs = await queryREST.executeQueryJSON(url, q);
           console.log("RLB search results:", fs.features?.length);
           (fs.features || []).forEach(f => {
-            const attrs = f.attributes;
-            const name = attrs["Label"] || attrs["LABEL"] || attrs["label"] ||
-                         attrs["Name"]  || attrs["NAME"]  || attrs["name"]  ||
-                         `Feature ${attrs["OBJECTID"]}`;
+            const name = f.attributes["Label"] || f.attributes["Boundary_type"] || `Feature ${f.attributes["OBJECTID"]}`;
             results.push({ label: name, type: "RLB", geometry: f.geometry });
           });
         } catch(e) { console.log("RLB query error:", e.message); }
