@@ -1480,7 +1480,7 @@ require([
         // Append designation type to name where the name field doesn't include it
         const sn = r.cfg.shortName.toLowerCase();
         if (sn.includes("ramsar") && !/ramsar/i.test(name)) {
-          name = `${name} Ramsar Site`;
+          name = `${name} RAMSAR`;
         } else if (sn.includes("spa") && !/spa|special protection/i.test(name)) {
           name = `${name} SPA`;
         } else if (sn.includes("sac") && !/sac|special area/i.test(name)) {
