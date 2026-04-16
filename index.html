@@ -458,8 +458,6 @@ require([
   "esri/views/MapView",
   "esri/WebMap",
   "esri/geometry/geometryEngineAsync",
-  "esri/geometry/projection",
-  "esri/geometry/SpatialReference",
   "esri/Graphic",
   "esri/rest/query",
   "esri/rest/support/Query",
@@ -467,7 +465,7 @@ require([
   "esri/identity/IdentityManager",
 ], function(
   Map, MapView, WebMap,
-  geometryEngineAsync, projection, SpatialReference,
+  geometryEngineAsync,
   Graphic, queryREST, Query,
   OAuthInfo, IdentityManager
 ) {
@@ -731,26 +729,10 @@ require([
 
     const bufferMetres = bufferKm * 1000;
 
-    // ── Load projection module & buffer ─────────────────────────────────────
+    // ── Create buffer in Web Mercator (compatible with all AGOL feature services)
     let geom = selectedGeom;
-    showProgress(10, "Projecting geometry…");
-    try {
-      await Promise.race([
-        projection.load(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 4000))
-      ]);
-      const bng = new SpatialReference({ wkid: 27700 });
-      const projected = projection.project(selectedGeom, bng);
-      if (projected) {
-        geom = projected;
-        console.log("Projected to BNG successfully");
-      }
-    } catch(e) {
-      console.log("Projection skipped:", e.message, "— using original geometry");
-    }
-
-    showProgress(20, "Creating buffer…");
-    console.log("Buffer input geometry type:", geom.type, "SR:", geom.spatialReference?.wkid);
+    showProgress(10, "Creating buffer…");
+    console.log("Geometry type:", geom.type, "SR:", geom.spatialReference?.wkid);
 
     let bufGeom;
     try {
@@ -758,16 +740,11 @@ require([
       console.log("Geodesic buffer created:", !!bufGeom);
     } catch(e) {
       console.error("geodesicBuffer failed:", e);
-    }
-
-    // Fallback to planar buffer if geodesic fails
-    if (!bufGeom) {
-      console.log("Trying planar buffer as fallback…");
       try {
         bufGeom = await geometryEngineAsync.buffer(geom, bufferMetres, "meters");
-        console.log("Planar buffer created:", !!bufGeom);
-      } catch(e) {
-        console.error("Planar buffer also failed:", e);
+        console.log("Planar buffer fallback created:", !!bufGeom);
+      } catch(e2) {
+        console.error("Planar buffer also failed:", e2);
       }
     }
 
@@ -828,6 +805,7 @@ require([
       let url = layer.url;
       if (layer.layerId !== undefined && layer.layerId !== null) url += `/${layer.layerId}`;
       else if (layer.sublayers && layer.sublayers.length) url += `/0`;
+      console.log(`Querying "${cfg.title}" → ${url}`);
 
       try {
         const q = new Query({
