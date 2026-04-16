@@ -1042,9 +1042,9 @@ require([
       const rows = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
       if (!rows.length) throw new Error("Sheet is empty");
 
-      // Log sample columns for debugging
-      const sampleCols = rows[0] ? Object.keys(rows[0]).join(", ") : "none";
-      setJnccStatus(`⏳ Building lookup (${rows.length} rows)…`, "loading");
+      // Show actual column names in status bar so we can diagnose mismatches
+      const cols = Object.keys(rows[0]).join(" | ");
+      setJnccStatus(`⏳ Building lookup — cols: ${cols.slice(0,120)}`, "loading");
 
       const lookup = {};
       rows.forEach(row => {
@@ -1077,7 +1077,13 @@ require([
       Object.values(lookup).forEach(v => { v.designations = [...v.designations].sort(); });
       jnccLookup = lookup;
       const n = Object.keys(lookup).length;
-      setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa loaded`, "ok");
+      if (n === 0) {
+        // Show first row to diagnose column name mismatch
+        const sample = rows[0] ? JSON.stringify(rows[0]).slice(0, 200) : "no rows";
+        setJnccStatus(`✗ 0 taxa matched. First row: ${sample}`, "error");
+      } else {
+        setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa loaded`, "ok");
+      }
 
     } catch(e) {
       setJnccStatus(`✗ Species data failed: ${e.message}`, "error");
