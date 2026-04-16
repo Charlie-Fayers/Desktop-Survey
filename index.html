@@ -740,7 +740,7 @@ require([
 
       { title: "Special Protection Areas (England)",
         shortName: "Special Protection Areas (SPAs)",
-        nameField: "NAME", type: "statutory", maxList: 4 },
+        nameField: "SPA_NAME", type: "statutory", maxList: 4 },
 
       { title: "Ramsar (England)",
         shortName: "Ramsar wetland sites",
@@ -1185,23 +1185,27 @@ require([
         const PAGE = 500;
 
         if (cfg.groupByField) {
-          // Step 1: true count
-          const countQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" });
-          let trueCount = 0;
-          try { const cr = await queryREST.executeQueryJSON(url, countQ); trueCount = cr.count || 0; } catch(e) {}
-
-          // Step 2: get up to 2000 features for name values (no geometry)
-          // Fetch with duplicates so we can count per-type accurately
+          // Step 1: get up to 2000 features for name values (no geometry)
+          // Do this first — also use as fallback count if returnCountOnly fails
           const nameQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", outFields: [cfg.nameField], returnGeometry: false, num: 2000 });
           const nameFs = await queryREST.executeQueryJSON(url, nameQ);
           const rawNames = (nameFs.features || []).map(f => f.attributes[cfg.nameField]).filter(Boolean);
           const unique = [...new Set(rawNames)];
+          console.log(`PHI name query: ${rawNames.length} features, ${unique.length} unique types`);
+
+          // Step 2: true count (with fallback to rawNames length)
+          let trueCount = rawNames.length;
+          try {
+            const countQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" });
+            const cr = await queryREST.executeQueryJSON(url, countQ);
+            if (cr.count > 0) trueCount = cr.count;
+          } catch(e) { console.log("PHI count query failed, using feature count:", trueCount); }
 
           results[cfg.title] = {
-            status: trueCount > 0 ? "found" : "absent",
+            status: trueCount > 0 ? "found" : (rawNames.length > 0 ? "found" : "absent"),
             count: trueCount,
             names: unique,
-            _rawNames: rawNames, // preserve with duplicates for per-type counting
+            _rawNames: rawNames,
             features: [],
             cfg,
           };
@@ -1471,7 +1475,18 @@ require([
     const seenNames = new Set();
     for (const r of statutory) {
       for (const f of r.features) {
-        const name = f.attributes[r.cfg.nameField] || "Unnamed";
+        let name = f.attributes[r.cfg.nameField] || "Unnamed";
+
+        // Append designation type to name where the name field doesn't include it
+        const sn = r.cfg.shortName.toLowerCase();
+        if (sn.includes("ramsar") && !/ramsar/i.test(name)) {
+          name = `${name} Ramsar Site`;
+        } else if (sn.includes("spa") && !/spa|special protection/i.test(name)) {
+          name = `${name} SPA`;
+        } else if (sn.includes("sac") && !/sac|special area/i.test(name)) {
+          name = `${name} SAC`;
+        }
+
         if (seenNames.has(name)) continue;
         seenNames.add(name);
         const distM = await nearestDistanceM(f.geometry, rlbGeom);
@@ -1493,12 +1508,17 @@ require([
       <table><thead><tr><th>Site Name</th><th>Size, Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
       for (const row of statRows) {
         const sizeStr = row.ha ? `${row.ha} hectares<br>` : "";
+        const distText = locStr(row.distM, row.dir);
+        // Ensure "approx." prefix and capitalise first letter
+        const distFormatted = distText.startsWith("approx.")
+          ? "Approx. " + distText.slice(7)
+          : distText.charAt(0).toUpperCase() + distText.slice(1);
         const reasonCell = row.cite
           ? `<a class="citation-link" href="${row.cite}" target="_blank">[Insert from NE citation ↗]</a>`
           : ph("Insert from NE citation");
         html += `<tr>
           <td>${row.name}</td>
-          <td>${sizeStr}${locStr(row.distM, row.dir).charAt(0).toUpperCase() + locStr(row.distM, row.dir).slice(1)}</td>
+          <td>${sizeStr}${distFormatted}</td>
           <td>${reasonCell}</td>
           <td><span class="badge ${importanceClass(row.imp)}">${row.imp}</span></td>
         </tr>`;
