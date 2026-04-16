@@ -896,11 +896,6 @@ require([
   // Layers are queried via their REST endpoints regardless of visibility.
   view.when(() => {
     buildLayerPanel();
-    // Load fflate zip library after Dojo to avoid AMD conflict
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js";
-    s.onload = () => console.log("fflate ready:", typeof fflate);
-    document.body.appendChild(s);
   });
 
   // ── Layer panel ───────────────────────────────────────────────────────────
@@ -1501,15 +1496,139 @@ require([
   }
 
   // ── Copy ──────────────────────────────────────────────────────────────────
-  // ── Export to Word (raw OOXML + fflate zip, no AMD conflict) ─────────────
+  // ── Export to Word ────────────────────────────────────────────────────────
+  // Pure vanilla JS — no external libraries, no AMD conflicts.
+  // Builds a valid .docx (OOXML) using native browser Compression Streams API.
+
+  // ── Zip builder (native DeflateRaw) ───────────────────────────────────────
+  async function deflateRaw(data) {
+    const cs = new CompressionStream("deflate-raw");
+    const writer = cs.writable.getWriter();
+    writer.write(data);
+    writer.close();
+    const chunks = [];
+    const reader = cs.readable.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    const out = new Uint8Array(chunks.reduce((a,b) => a+b.length, 0));
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+  }
+
+  function crc32(data) {
+    let crc = 0xFFFFFFFF;
+    const table = crc32.t || (crc32.t = (() => {
+      const t = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let j = 0; j < 8; j++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        t[i] = c;
+      }
+      return t;
+    })());
+    for (let i = 0; i < data.length; i++) crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function u16le(n) { return [n & 0xFF, (n >> 8) & 0xFF]; }
+  function u32le(n) { return [n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF]; }
+
+  async function buildZip(files) {
+    // files: [{name, data: Uint8Array}]
+    const enc = new TextEncoder();
+    const entries = [];
+
+    for (const f of files) {
+      const nameBytes = enc.encode(f.name);
+      const compressed = await deflateRaw(f.data);
+      const crc = crc32(f.data);
+      const localHeader = new Uint8Array([
+        0x50,0x4B,0x03,0x04, // local file header sig
+        0x14,0x00,           // version needed: 2.0
+        0x00,0x00,           // general purpose flags
+        0x08,0x00,           // compression: deflate
+        0x00,0x00,           // mod time
+        0x00,0x00,           // mod date
+        ...u32le(crc),
+        ...u32le(compressed.length),
+        ...u32le(f.data.length),
+        ...u16le(nameBytes.length),
+        0x00,0x00,           // extra field length
+        ...nameBytes,
+      ]);
+      entries.push({ nameBytes, localHeader, compressed, crc, uncompressedSize: f.data.length });
+    }
+
+    // Assemble local file entries
+    const parts = [];
+    let offset = 0;
+    const offsets = [];
+    for (const e of entries) {
+      offsets.push(offset);
+      parts.push(e.localHeader);
+      parts.push(e.compressed);
+      offset += e.localHeader.length + e.compressed.length;
+    }
+
+    // Central directory
+    const cdParts = [];
+    let cdSize = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const cd = new Uint8Array([
+        0x50,0x4B,0x01,0x02, // central dir sig
+        0x14,0x00,           // version made by
+        0x14,0x00,           // version needed
+        0x00,0x00,           // flags
+        0x08,0x00,           // compression
+        0x00,0x00,0x00,0x00, // mod time/date
+        ...u32le(e.crc),
+        ...u32le(e.compressed.length),
+        ...u32le(e.uncompressedSize),
+        ...u16le(e.nameBytes.length),
+        0x00,0x00,           // extra
+        0x00,0x00,           // comment
+        0x00,0x00,           // disk start
+        0x00,0x00,           // int attrib
+        0x00,0x00,0x00,0x00, // ext attrib
+        ...u32le(offsets[i]),
+        ...e.nameBytes,
+      ]);
+      cdParts.push(cd);
+      cdSize += cd.length;
+    }
+
+    // End of central directory record
+    const eocd = new Uint8Array([
+      0x50,0x4B,0x05,0x06,
+      0x00,0x00,0x00,0x00,
+      ...u16le(entries.length),
+      ...u16le(entries.length),
+      ...u32le(cdSize),
+      ...u32le(offset),
+      0x00,0x00,
+    ]);
+
+    const all = [...parts, ...cdParts, eocd];
+    const total = all.reduce((a, b) => a + b.length, 0);
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const p of all) { out.set(p, pos); pos += p.length; }
+    return out;
+  }
+
+  // ── OOXML builder ──────────────────────────────────────────────────────────
   window.exportToWord = async function() {
     const btn = document.getElementById("btnExport");
     btn.textContent = "Generating\u2026";
     btn.disabled = true;
     try {
-      if (typeof fflate === "undefined") throw new Error("fflate not ready — wait a moment and try again");
       const el = document.getElementById("reportBody");
-
+      const enc = new TextEncoder();
       const FONT="Century Gothic", GREEN="1A3D2B", LINE="C9DECE", ALT="F4F9F5", SZ9="18", SZ8="16";
       const esc = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
@@ -1526,12 +1645,12 @@ require([
         if (tag === "h2") {
           body += `<w:p><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr>${run(node.innerText,SZ9,true,GREEN)}</w:p>`;
         } else if (tag === "h3") {
-          body += `<w:p><w:pPr><w:spacing w:before="100" w:after="40"/></w:pPr>${run(node.innerText,SZ9,true,"333333")}</w:p>`;
+          body += `<w:p><w:pPr><w:spacing w:before="100" w:after="40"/></w:pPr>${run(node.innerText,SZ9,true,"444444")}</w:p>`;
         } else if (tag === "p") {
           const ns = node.querySelector(".para-num");
           const ph = node.querySelector(".placeholder");
           let runs = ns ? run(ns.innerText+" ",SZ9,true) : "";
-          runs += run(node.innerText.replace(ns?.innerText||"","").trim(), SZ9, false, ph?"8A6200":"111D13");
+          runs += run(node.innerText.replace(ns?.innerText||"","").trim(),SZ9,false,ph?"8A6200":"111D13");
           body += par(runs);
         } else if (tag === "ul") {
           node.querySelectorAll("li").forEach(li => {
@@ -1561,16 +1680,15 @@ require([
       const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
       const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
 
-      const enc = s => fflate.strToU8(s);
-      const zipped = fflate.zipSync({
-        "[Content_Types].xml": enc(ctXml),
-        "_rels/.rels": enc(rootRels),
-        "word/document.xml": enc(docXml),
-        "word/styles.xml": enc(stylesXml),
-        "word/_rels/document.xml.rels": enc(docRels),
-      });
+      const zipData = await buildZip([
+        { name: "[Content_Types].xml",          data: enc.encode(ctXml) },
+        { name: "_rels/.rels",                  data: enc.encode(rootRels) },
+        { name: "word/document.xml",            data: enc.encode(docXml) },
+        { name: "word/styles.xml",              data: enc.encode(stylesXml) },
+        { name: "word/_rels/document.xml.rels", data: enc.encode(docRels) },
+      ]);
 
-      const blob = new Blob([zipped], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+      const blob = new Blob([zipData], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -1581,7 +1699,7 @@ require([
       setTimeout(() => { btn.textContent = "\uD83D\uDCC4 Export to Word"; btn.disabled = false; }, 2500);
     } catch(e) {
       console.error("Word export failed:", e);
-      btn.textContent = e.message.includes("fflate") ? e.message : "Export failed \u2014 see console";
+      btn.textContent = "Export failed \u2014 see console";
       btn.disabled = false;
     }
   };
