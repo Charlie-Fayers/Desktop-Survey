@@ -1105,7 +1105,8 @@ require([
 
         const latinCol  = headers.find(h => /^Recommended_taxon_name$/i.test(h) || /recommended.*taxon.*name/i.test(h));
         const commonCol = headers.find(h => /^Common_name$/i.test(h) || /common.?name/i.test(h));
-        const groupCol  = headers.find(h => /^Taxon_group$/i.test(h) || /taxon.?group/i.test(h));
+        // Taxon group is in the first column (the "For further details..." note column)
+        const groupCol  = headers[0];
 
         // Map each designation column to a label function
         // We pattern-match on the column header value
@@ -1148,6 +1149,8 @@ require([
           else if (/birds.*conservation.*concern.*5|bocc.*5|bocc5/i.test(hl) ||
                    /red data categor.*birds|fd.*red data.*birds/i.test(hl))
             desigCols.push({ h, label: (v) => `BoCC5 ${v.charAt(0).toUpperCase()+v.slice(1).toLowerCase()} List`, filter: (v) => /red|amber/i.test(v) });
+          else if (/biodiversity.*list.*england|hb.*biodiversity/i.test(hl))
+            desigCols.push({ h, label: () => "Biodiversity List (England)", filter: (v) => !!v && v !== "0" && v !== "N" });
           // Exclude Birds Directive deliberately
         });
 
@@ -1157,7 +1160,10 @@ require([
         rows.forEach(row => {
           const latinName = String(row[latinCol] || "").trim().toLowerCase();
           const comName   = String(row[commonCol] || "").trim().toLowerCase();
-          const taxGroup  = String(row[groupCol]  || "").trim();
+          // First column contains taxon group in format "common group name (Kingdom)"
+          // Extract just the group name before the parenthesis
+          const rawGroup  = String(row[groupCol] || "").trim();
+          const taxGroup  = rawGroup.replace(/\s*\([^)]*\)\s*$/, "").trim() || rawGroup;
           if (!latinName || latinName === "recommended_taxon_name") return;
 
           const designations = new Set();
@@ -2191,7 +2197,9 @@ require([
         allSpecies.forEach(({ common, latin }) => {
           const match = (latin && lookupSpecies(latin)) || lookupSpecies(common);
           if (!match) return;
-          const cat = match.taxonGroup || "Other";
+          const cat = (match.taxonGroup || "Other")
+            .replace(/\s*\(.*?\)\s*/g, "").trim() // strip "(Hemichordata)" etc.
+            || "Other";
           if (!byCategory[cat]) byCategory[cat] = [];
           // Display as "Common name (Latin name)" if both available
           const displayName = latin ? `${common} <em>(${latin})</em>` : common;
