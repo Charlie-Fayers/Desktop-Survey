@@ -588,7 +588,7 @@ require([
       // ── England: statutory designations ──────────────────────────────────
       { title: "Sites of Special Scientific Interest (England)",
         shortName: "Sites of Special Scientific Interest (SSSIs)",
-        nameField: "SSSI_NAME", type: "statutory", maxList: 4 },
+        nameField: "NAME", type: "statutory", maxList: 4 },
 
       { title: "Special Areas of Conservation (England)",
         shortName: "Special Areas of Conservation (SACs)",
@@ -596,19 +596,19 @@ require([
 
       { title: "Special Protection Areas (England)",
         shortName: "Special Protection Areas (SPAs)",
-        nameField: "SPA_NAME", type: "statutory", maxList: 4 },
+        nameField: "NAME", type: "statutory", maxList: 4 },
 
       { title: "Ramsar (England)",
         shortName: "Ramsar wetland sites",
-        nameField: "RAMSAR_NAME", type: "statutory", maxList: 4 },
+        nameField: "NAME", type: "statutory", maxList: 4 },
 
       { title: "National Nature Reserves (England)",
         shortName: "National Nature Reserves (NNRs)",
-        nameField: "NNR_Name", type: "statutory", maxList: 4 },
+        nameField: "NAME", type: "statutory", maxList: 4 },
 
       { title: "Local Nature Reserves (England)",
         shortName: "Local Nature Reserves (LNRs)",
-        nameField: "LNR_NAME", type: "statutory", maxList: 4 },
+        nameField: "NAME", type: "statutory", maxList: 4 },
 
       { title: "Areas of Outstanding Natural Beauty (England)",
         shortName: "Areas of Outstanding Natural Beauty (AONBs)",
@@ -658,7 +658,7 @@ require([
 
       { title: "Priority Habitats Inventory (England)",
         shortName: "Priority Habitat Inventory parcels",
-        nameField: "Main_Habit", type: "habitat",
+        nameField: "MainHabs", type: "habitat",
         groupByField: true, maxList: 6 },
 
       // ── Wales: habitats (WMS — display only, cannot query) ───────────────
@@ -715,11 +715,11 @@ require([
       // ── Biodiversity records ──────────────────────────────────────────────
       { title: "iNaturalist Observations",
         shortName: "iNaturalist biodiversity observations",
-        nameField: "Common Name", type: "records", maxList: 5 },
+        nameField: "common_name", type: "records", maxList: 5 },
 
       { title: "C&W In-house Records",
         shortName: "C&W in-house biodiversity records",
-        nameField: "Common Name", type: "records", maxList: 5 },
+        nameField: "Common_Name", type: "records", maxList: 5 },
     ],
   };
   // ══════════════════════════════════════════════════════════════════════════
