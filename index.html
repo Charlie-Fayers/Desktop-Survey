@@ -687,7 +687,7 @@
 </div>
 
 <!-- docx.js for Word export -->
-<script src="https://unpkg.com/docx@8.2.3/build/index.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/docx@8.2.3/build/index.js"></script>
 
 <!-- ── Script ────────────────────────────────────────────────────────────── -->
 <script>
@@ -1504,9 +1504,13 @@ require([
     btn.disabled = true;
 
     try {
+      // docx.js may export as window.docx or window.docx.docx depending on build
+      const docxLib = window.docx || window.docxjs;
+      if (!docxLib) throw new Error("docx library not loaded — check CDN");
+
       const { Document, Paragraph, Table, TableRow, TableCell, TextRun,
-              HeadingLevel, AlignmentType, WidthType, BorderStyle,
-              ShadingType, Packer } = docx;
+              AlignmentType, WidthType, BorderStyle,
+              ShadingType, Packer } = docxLib;
 
       const FONT   = "Century Gothic";
       const SZ     = 18;   // 9pt in half-points
@@ -1686,7 +1690,7 @@ require([
         let url = layer.url;
         if (layer.layerId !== undefined) url += `/${layer.layerId}`;
         const q = new Query({
-          where: `UPPER(NAME) LIKE UPPER('%${query.replace(/'/g,"''")}%') OR UPPER(OBJECTID) LIKE '%${query}%'`,
+          where: `UPPER(LABEL) LIKE UPPER('%${query.replace(/'/g,"''")}%') OR UPPER(NAME) LIKE UPPER('%${query.replace(/'/g,"''")}%')`,
           outFields: ["*"],
           returnGeometry: true,
           num: 5,
@@ -1694,7 +1698,7 @@ require([
         try {
           const fs = await queryREST.executeQueryJSON(url, q);
           (fs.features || []).forEach(f => {
-            const name = f.attributes["NAME"] || f.attributes["name"] || `Feature ${f.attributes["OBJECTID"]}`;
+            const name = f.attributes["LABEL"] || f.attributes["NAME"] || f.attributes["name"] || `Feature ${f.attributes["OBJECTID"]}`;
             results.push({ label: name, type: "RLB", geometry: f.geometry });
           });
         } catch(e) {}
