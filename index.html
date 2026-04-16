@@ -1351,10 +1351,62 @@ require([
     return "badge-local";
   }
 
-  function citationUrl(attrs) {
-    const code = attrs["REF_CODE"] || attrs["SAC_CODE"] || attrs["ID"] || attrs["REF"];
-    if (!code) return null;
-    return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=S${code}`;
+  function citationUrl(attrs, cfg) {
+    // Each designation type has a different code field and URL pattern
+    const shortName = (cfg?.shortName || "").toLowerCase();
+
+    // SSSI — REF_CODE → SiteCitation.aspx
+    if (shortName.includes("sssi") || shortName.includes("special scientific")) {
+      const code = attrs["REF_CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteCitation.aspx?SiteCode=S${code}`;
+    }
+
+    // SAC — SAC_CODE → SiteDetail
+    if (shortName.includes("sac") || shortName.includes("special area")) {
+      const code = attrs["SAC_CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+    }
+
+    // SPA — SPA_CODE → SiteDetail
+    if (shortName.includes("spa") || shortName.includes("special protection")) {
+      const code = attrs["SPA_CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+    }
+
+    // Ramsar — CODE → SiteDetail
+    if (shortName.includes("ramsar")) {
+      const code = attrs["CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+    }
+
+    // NNR — HYPERLINK field already contains the full URL
+    if (shortName.includes("nnr") || shortName.includes("national nature")) {
+      if (attrs["HYPERLINK"]) return attrs["HYPERLINK"];
+      const code = attrs["REF_CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=S${code}`;
+    }
+
+    // LNR — REF_CODE → SiteDetail
+    if (shortName.includes("lnr") || shortName.includes("local nature")) {
+      const code = attrs["REF_CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=S${code}`;
+    }
+
+    // AONB — HOTLINK field, or CODE
+    if (shortName.includes("aonb") || shortName.includes("outstanding natural beauty")) {
+      if (attrs["HOTLINK"]) return attrs["HOTLINK"];
+      const code = attrs["CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+    }
+
+    // National Park — HOTLINK field, or CODE
+    if (shortName.includes("national park")) {
+      if (attrs["HOTLINK"]) return attrs["HOTLINK"];
+      const code = attrs["CODE"];
+      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+    }
+
+    return null;
   }
 
   function locStr(distM, dir) {
@@ -1424,7 +1476,7 @@ require([
         const dir   = directionFromRlb(rlbGeom, f.geometry);
         const ha    = formatHa(f.attributes);
         const imp   = designationImportance(r.cfg.shortName);
-        const cite  = citationUrl(f.attributes);
+        const cite  = citationUrl(f.attributes, r.cfg);
         statRows.push({ name, distM, dir, ha, attrs: f.attributes, cfg: r.cfg, imp, cite });
       }
     }
@@ -1709,6 +1761,34 @@ require([
       function run(t,sz,bold,col){ return `<w:r>${rpr(sz,bold,col)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`; }
       function par(runs,after){ return `<w:p><w:pPr><w:spacing w:after="${after||80}"/></w:pPr>${runs}</w:p>`; }
 
+      // Collect hyperlinks as we build — each gets a unique rId
+      const hyperlinkRels = [];
+      function hlRun(text, href, sz) {
+        const rId = `rLnk${hyperlinkRels.length + 2}`; // rId1 = styles
+        hyperlinkRels.push({ rId, href });
+        return `<w:hyperlink r:id="${rId}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:color w:val="2D6A4F"/><w:u w:val="single"/><w:sz w:val="${sz||SZ8}"/><w:szCs w:val="${sz||SZ8}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr><w:t>${esc(text)}</w:t></w:r></w:hyperlink>`;
+      }
+
+      // Build cell content — handles inline <a> tags as Word hyperlinks
+      function cellContent(td, sz, isHdr, textCol) {
+        const parts = [];
+        td.childNodes.forEach(n => {
+          if (n.nodeType === 3) { // text node
+            const t = n.textContent.trim();
+            if (t) parts.push(run(t, sz, isHdr, textCol));
+          } else if (n.nodeType === 1 && n.tagName === "A") {
+            const href = n.getAttribute("href");
+            const t = n.innerText.trim();
+            if (href && t) parts.push(hlRun(t, href, sz));
+            else if (t) parts.push(run(t, sz, false, "2D6A4F"));
+          } else if (n.nodeType === 1) {
+            const t = n.innerText?.trim();
+            if (t) parts.push(run(t, sz, isHdr, textCol));
+          }
+        });
+        return parts.join("") || run(td.innerText.trim(), sz, isHdr, textCol);
+      }
+
       let body = "";
       el.childNodes.forEach(node => {
         if (node.nodeType !== 1) return;
@@ -1737,7 +1817,10 @@ require([
             const cw = Math.floor(9000/cells.length);
             let row = "<w:tr>";
             cells.forEach(td => {
-              row += `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:shd w:val="clear" w:fill="${fill}"/></w:tcPr><w:p><w:pPr><w:spacing w:after="40" w:before="40"/></w:pPr>${run(td.innerText.trim(),SZ8,isHdr,isHdr?"FFFFFF":"111D13")}</w:p></w:tc>`;
+              const content = isHdr
+                ? run(td.innerText.trim(), SZ8, true, "FFFFFF")
+                : cellContent(td, SZ8, false, "111D13");
+              row += `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:shd w:val="clear" w:fill="${fill}"/></w:tcPr><w:p><w:pPr><w:spacing w:after="40" w:before="40"/></w:pPr>${content}</w:p></w:tc>`;
             });
             tbl += row + "</w:tr>";
           });
@@ -1745,11 +1828,17 @@ require([
         }
       });
 
-      const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="1080"/></w:sectPr></w:body></w:document>`;
+      // Build document.xml with correct namespace for hyperlinks
+      const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="1080"/></w:sectPr></w:body></w:document>`;
       const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`;
       const ctXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`;
       const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
-      const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+
+      // Build docRels including all hyperlinks collected during body build
+      const hlRelsXml = hyperlinkRels.map(h =>
+        `<Relationship Id="${h.rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${h.href.replace(/&/g,"&amp;")}" TargetMode="External"/>`
+      ).join("");
+      const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${hlRelsXml}</Relationships>`;
 
       const zipData = await buildZip([
         { name: "[Content_Types].xml",          data: enc.encode(ctXml) },
