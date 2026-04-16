@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ecological Screening Tool</title>
+  <title>Automated Desk Study</title>
 
   <!-- ArcGIS Maps SDK 4.29 -->
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
@@ -686,8 +686,7 @@
   </div>
 </div>
 
-<!-- JSZip for building raw OOXML .docx without AMD conflicts -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- Word export uses fflate (WASM-free zip, no AMD conflict) loaded after Dojo -->
 
 <!-- ── Script ────────────────────────────────────────────────────────────── -->
 <script>
@@ -897,6 +896,11 @@ require([
   // Layers are queried via their REST endpoints regardless of visibility.
   view.when(() => {
     buildLayerPanel();
+    // Load fflate zip library after Dojo to avoid AMD conflict
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js";
+    s.onload = () => console.log("fflate ready:", typeof fflate);
+    document.body.appendChild(s);
   });
 
   // ── Layer panel ───────────────────────────────────────────────────────────
@@ -1497,140 +1501,87 @@ require([
   }
 
   // ── Copy ──────────────────────────────────────────────────────────────────
-  // ── Export to Word (raw OOXML via JSZip — no AMD conflicts) ───────────────
+  // ── Export to Word (raw OOXML + fflate zip, no AMD conflict) ─────────────
   window.exportToWord = async function() {
     const btn = document.getElementById("btnExport");
     btn.textContent = "Generating\u2026";
     btn.disabled = true;
     try {
-      if (typeof JSZip === "undefined") throw new Error("JSZip not loaded");
+      if (typeof fflate === "undefined") throw new Error("fflate not ready — wait a moment and try again");
       const el = document.getElementById("reportBody");
 
-      // ── Helpers ─────────────────────────────────────────────────────────
-      const esc = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-      const FONT = "Century Gothic";
-      const GREEN = "1A3D2B"; const LINE = "C9DECE"; const ALT = "F4F9F5";
-      const SZ9 = "18"; const SZ8 = "16"; // half-points
+      const FONT="Century Gothic", GREEN="1A3D2B", LINE="C9DECE", ALT="F4F9F5", SZ9="18", SZ8="16";
+      const esc = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
-      function rPr(sz, bold, color) {
-        return `<w:rPr>${bold?"<w:b/>":""}<w:color w:val="${color||"111D13"}"/><w:sz w:val="${sz||SZ9}"/><w:szCs w:val="${sz||SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr>`;
+      function rpr(sz,bold,col) {
+        return `<w:rPr>${bold?"<w:b/>":""}<w:color w:val="${col||"111D13"}"/><w:sz w:val="${sz||SZ9}"/><w:szCs w:val="${sz||SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr>`;
       }
-      function run(text, sz, bold, color) {
-        return `<w:r>${rPr(sz,bold,color)}<w:t xml:space="preserve">${esc(text)}</w:t></w:r>`;
-      }
-      function para(runs, spaceAfter) {
-        return `<w:p><w:pPr><w:spacing w:after="${spaceAfter||80}"/></w:pPr>${runs}</w:p>`;
-      }
-      function heading(text, color) {
-        return para(run(text, SZ9, true, color||GREEN), 60);
-      }
+      function run(t,sz,bold,col){ return `<w:r>${rpr(sz,bold,col)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`; }
+      function par(runs,after){ return `<w:p><w:pPr><w:spacing w:after="${after||80}"/></w:pPr>${runs}</w:p>`; }
 
-      // ── Parse DOM nodes into OOXML ───────────────────────────────────────
       let body = "";
-
       el.childNodes.forEach(node => {
         if (node.nodeType !== 1) return;
         const tag = node.tagName.toLowerCase();
-
         if (tag === "h2") {
-          body += `<w:p><w:pPr><w:spacing w:before="160" w:after="60"/><w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="${LINE}"/></w:pBdr></w:pPr>${run(node.innerText, SZ9, true, GREEN)}</w:p>`;
-
+          body += `<w:p><w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr>${run(node.innerText,SZ9,true,GREEN)}</w:p>`;
         } else if (tag === "h3") {
-          body += `<w:p><w:pPr><w:spacing w:before="100" w:after="40"/></w:pPr>${run(node.innerText, SZ9, true, "333333")}</w:p>`;
-
+          body += `<w:p><w:pPr><w:spacing w:before="100" w:after="40"/></w:pPr>${run(node.innerText,SZ9,true,"333333")}</w:p>`;
         } else if (tag === "p") {
-          const numSpan = node.querySelector(".para-num");
-          let runs = "";
-          if (numSpan) runs += run(numSpan.innerText + " ", SZ9, true);
-          const rest = node.innerText.replace(numSpan?.innerText||"","").trim();
-          // Check if placeholder
-          const isph = node.querySelector(".placeholder");
-          runs += run(rest, SZ9, false, isph ? "8A6200" : "111D13");
-          body += para(runs, 80);
-
+          const ns = node.querySelector(".para-num");
+          const ph = node.querySelector(".placeholder");
+          let runs = ns ? run(ns.innerText+" ",SZ9,true) : "";
+          runs += run(node.innerText.replace(ns?.innerText||"","").trim(), SZ9, false, ph?"8A6200":"111D13");
+          body += par(runs);
         } else if (tag === "ul") {
           node.querySelectorAll("li").forEach(li => {
-            body += `<w:p><w:pPr><w:spacing w:after="40"/><w:ind w:left="360"/></w:pPr>${run("\u2022 " + li.innerText, SZ9)}</w:p>`;
+            body += `<w:p><w:pPr><w:spacing w:after="40"/><w:ind w:left="360"/></w:pPr>${run("\u2022 "+li.innerText,SZ9)}</w:p>`;
           });
-
         } else if (tag === "table") {
           const rows = node.querySelectorAll("tr");
-          let txml = `<w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="${LINE}"/><w:left w:val="single" w:sz="4" w:color="${LINE}"/><w:bottom w:val="single" w:sz="4" w:color="${LINE}"/><w:right w:val="single" w:sz="4" w:color="${LINE}"/><w:insideH w:val="single" w:sz="4" w:color="${LINE}"/><w:insideV w:val="single" w:sz="4" w:color="${LINE}"/></w:tblBorders></w:tblPr>`;
-          rows.forEach((tr, ri) => {
+          let tbl = `<w:tbl><w:tblPr><w:tblW w:w="9000" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="${LINE}"/><w:left w:val="single" w:sz="4" w:color="${LINE}"/><w:bottom w:val="single" w:sz="4" w:color="${LINE}"/><w:right w:val="single" w:sz="4" w:color="${LINE}"/><w:insideH w:val="single" w:sz="4" w:color="${LINE}"/><w:insideV w:val="single" w:sz="4" w:color="${LINE}"/></w:tblBorders></w:tblPr>`;
+          rows.forEach((tr,ri) => {
             const cells = tr.querySelectorAll("th,td");
-            const isHeader = cells[0]?.tagName === "TH";
-            const fill = isHeader ? GREEN : (ri%2===0 ? "FFFFFF" : ALT);
-            const cellW = Math.floor(9000/cells.length);
-            let rowXml = `<w:tr>`;
+            const isHdr = cells[0]?.tagName==="TH";
+            const fill = isHdr ? GREEN : (ri%2===0?"FFFFFF":ALT);
+            const cw = Math.floor(9000/cells.length);
+            let row = "<w:tr>";
             cells.forEach(td => {
-              const txt = td.innerText.trim();
-              rowXml += `<w:tc><w:tcPr><w:tcW w:w="${cellW}" w:type="dxa"/><w:shd w:val="clear" w:fill="${fill}"/></w:tcPr><w:p><w:pPr><w:spacing w:after="40" w:before="40"/></w:pPr>${run(txt, SZ8, isHeader, isHeader?"FFFFFF":"111D13")}</w:p></w:tc>`;
+              row += `<w:tc><w:tcPr><w:tcW w:w="${cw}" w:type="dxa"/><w:shd w:val="clear" w:fill="${fill}"/></w:tcPr><w:p><w:pPr><w:spacing w:after="40" w:before="40"/></w:pPr>${run(td.innerText.trim(),SZ8,isHdr,isHdr?"FFFFFF":"111D13")}</w:p></w:tc>`;
             });
-            rowXml += `</w:tr>`;
-            txml += rowXml;
+            tbl += row + "</w:tr>";
           });
-          txml += `</w:tbl><w:p><w:pPr><w:spacing w:after="80"/></w:pPr></w:p>`;
-          body += txml;
+          body += tbl + "</w:tbl><w:p/>";
         }
       });
 
-      // ── Assemble OOXML package ───────────────────────────────────────────
-      const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
-  xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<w:body>
-${body}
-<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="1080"/></w:sectPr>
-</w:body></w:document>`;
+      const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="1080"/></w:sectPr></w:body></w:document>`;
+      const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/></w:rPr></w:rPrDefault></w:docDefaults></w:styles>`;
+      const ctXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`;
+      const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`;
+      const docRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
 
-      const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
-</Relationships>`;
+      const enc = s => fflate.strToU8(s);
+      const zipped = fflate.zipSync({
+        "[Content_Types].xml": enc(ctXml),
+        "_rels/.rels": enc(rootRels),
+        "word/document.xml": enc(docXml),
+        "word/styles.xml": enc(stylesXml),
+        "word/_rels/document.xml.rels": enc(docRels),
+      });
 
-      const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:docDefaults><w:rPrDefault><w:rPr>
-<w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/>
-<w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/>
-</w:rPr></w:rPrDefault></w:docDefaults>
-</w:styles>`;
-
-      const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-<Default Extension="xml" ContentType="application/xml"/>
-<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
-</Types>`;
-
-      const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`;
-
-      const zip = new JSZip();
-      zip.file("[Content_Types].xml", contentTypes);
-      zip.file("_rels/.rels", rootRels);
-      zip.file("word/document.xml", docXml);
-      zip.file("word/styles.xml", stylesXml);
-      zip.file("word/_rels/document.xml.rels", relsXml);
-
-      const blob = await zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+      const blob = new Blob([zipped], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `Desk_Study_${new Date().toISOString().slice(0,10)}.docx`;
       a.click();
       URL.revokeObjectURL(url);
-
       btn.textContent = "\u2713 Downloaded";
       setTimeout(() => { btn.textContent = "\uD83D\uDCC4 Export to Word"; btn.disabled = false; }, 2500);
-
     } catch(e) {
       console.error("Word export failed:", e);
-      btn.textContent = "Export failed \u2014 see console";
+      btn.textContent = e.message.includes("fflate") ? e.message : "Export failed \u2014 see console";
       btn.disabled = false;
     }
   };
@@ -1663,7 +1614,7 @@ ${body}
         let url = layer.url;
         if (layer.layerId !== undefined) url += `/${layer.layerId}`;
         const q = new Query({
-          where: `UPPER(LABEL) LIKE UPPER('%${query.replace(/'/g,"''")}%') OR UPPER(NAME) LIKE UPPER('%${query.replace(/'/g,"''")}%')`,
+          where: `UPPER(Label) LIKE UPPER('%${query.replace(/'/g,"''")}%') OR UPPER(Name) LIKE UPPER('%${query.replace(/'/g,"''")}%')`,
           outFields: ["*"],
           returnGeometry: true,
           num: 5,
@@ -1671,10 +1622,13 @@ ${body}
         try {
           const fs = await queryREST.executeQueryJSON(url, q);
           (fs.features || []).forEach(f => {
-            const name = f.attributes["LABEL"] || f.attributes["NAME"] || f.attributes["name"] || `Feature ${f.attributes["OBJECTID"]}`;
+            // Try all common label field name casings
+            const name = f.attributes["Label"] || f.attributes["LABEL"] || f.attributes["label"] ||
+                         f.attributes["Name"] || f.attributes["NAME"] || f.attributes["name"] ||
+                         `Feature ${f.attributes["OBJECTID"]}`;
             results.push({ label: name, type: "RLB", geometry: f.geometry });
           });
-        } catch(e) {}
+        } catch(e) { console.log("RLB search error:", e); }
       }
     } catch(e) {}
 
