@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ecological Screening Tool</title>
+
+  <!-- ArcGIS Maps SDK 4.29 -->
+  <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
+  <script src="https://js.arcgis.com/4.29/"></script>
+
+  <style>
+    /* ── Tokens ──────────────────────────────────────────────────── */
+    :root {
+      --green-dark:   #1a3d2b;
+      --green-mid:    #2d6a4f;
+      --green-bright: #52b788;
+      --green-light:  #d8f3dc;
+      --green-pale:   #f0faf3;
+      --amber:        #e9c46a;
+      --amber-dark:   #8a6200;
+      --red:          #c1121f;
+      --red-light:    #fff0f0;
+      --ink:          #111d13;
+      --ink-mid:      #3a4a3e;
+      --ink-faint:    #6b7c6f;
+      --line:         #c9dece;
+      --surface:      #ffffff;
+      --bg:           #f4f9f5;
+      --radius:       6px;
+      --radius-lg:    10px;
+      --shadow:       0 2px 8px rgba(29,63,40,.10);
+      --shadow-lg:    0 6px 24px rgba(29,63,40,.13);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Georgia', serif;
+      background: var(--bg);
+      color: var(--ink);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────── */
+    header {
+      background: var(--green-dark);
+      color: #fff;
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,.25);
+      z-index: 10;
+    }
+    header svg { flex-shrink: 0; }
+    header h1 {
+      font-size: 15px;
+      font-weight: normal;
+      letter-spacing: .03em;
+    }
+    header h1 strong { font-weight: bold; font-size: 16px; }
+    header p { font-size: 11px; color: var(--green-bright); margin-top: 1px; letter-spacing: .02em; }
+
+    /* ── Layout ─────────────────────────────────────────────────── */
+    .layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Panel ──────────────────────────────────────────────────── */
+    .panel {
+      width: 340px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-inner {
+      padding: 16px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .panel-inner::-webkit-scrollbar { width: 5px; }
+    .panel-inner::-webkit-scrollbar-track { background: transparent; }
+    .panel-inner::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+
+    /* ── Map ────────────────────────────────────────────────────── */
+    #viewDiv {
+      flex: 1;
+      position: relative;
+    }
+
+    /* ── Section label ──────────────────────────────────────────── */
+    .section-label {
+      font-size: 10px;
+      font-weight: bold;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      margin-bottom: 8px;
+      margin-top: 18px;
+    }
+    .section-label:first-child { margin-top: 0; }
+
+    /* ── Config note ────────────────────────────────────────────── */
+    .config-note {
+      background: #fffbea;
+      border: 1px solid #f0d060;
+      border-radius: var(--radius);
+      padding: 8px 10px;
+      font-size: 11px;
+      color: #6b5200;
+      line-height: 1.5;
+      margin-bottom: 14px;
+    }
+    .config-note strong { font-weight: bold; }
+
+    /* ── Buffer control ─────────────────────────────────────────── */
+    .buffer-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .buffer-row input[type=number] {
+      width: 80px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-family: 'Georgia', serif;
+      color: var(--ink);
+      background: var(--surface);
+    }
+    .buffer-row input[type=number]:focus {
+      outline: none;
+      border-color: var(--green-mid);
+      box-shadow: 0 0 0 3px rgba(45,106,79,.15);
+    }
+    .buffer-row span { font-size: 13px; color: var(--ink-mid); }
+    .preset-row { display: flex; gap: 5px; }
+    .preset-btn {
+      padding: 4px 10px;
+      font-size: 11px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--bg);
+      color: var(--ink-mid);
+      cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+      font-family: 'Georgia', serif;
+    }
+    .preset-btn:hover { border-color: var(--green-mid); color: var(--green-dark); }
+    .preset-btn.active {
+      background: var(--green-dark);
+      border-color: var(--green-dark);
+      color: #fff;
+    }
+
+    /* ── Buttons ────────────────────────────────────────────────── */
+    .step-btn {
+      width: 100%;
+      padding: 9px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      font-family: 'Georgia', serif;
+      cursor: pointer;
+      transition: all .15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      border: 1px solid transparent;
+    }
+    .step-num {
+      width: 20px; height: 20px;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: bold;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .btn-select {
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .btn-select .step-num { background: var(--green-light); color: var(--green-dark); }
+    .btn-select:hover:not(:disabled) { border-color: var(--green-mid); }
+    .btn-select.selecting {
+      background: var(--green-light);
+      border-color: var(--green-mid);
+      color: var(--green-dark);
+      animation: pulse-border 1.4s ease-in-out infinite;
+    }
+    .btn-select.selected {
+      border-color: var(--green-bright);
+      background: var(--green-pale);
+    }
+    @keyframes pulse-border {
+      0%,100% { box-shadow: 0 0 0 0 rgba(82,183,136,.3); }
+      50%      { box-shadow: 0 0 0 5px rgba(82,183,136,0); }
+    }
+    .btn-run {
+      background: var(--green-mid);
+      color: #fff;
+      border-color: var(--green-mid);
+      font-weight: bold;
+    }
+    .btn-run .step-num { background: rgba(255,255,255,.25); color: #fff; }
+    .btn-run:hover:not(:disabled) { background: var(--green-dark); border-color: var(--green-dark); }
+    .btn-run:disabled {
+      background: #b0c8b8;
+      border-color: #b0c8b8;
+      cursor: not-allowed;
+      color: rgba(255,255,255,.7);
+    }
+
+    /* ── Status ─────────────────────────────────────────────────── */
+    .status-bar {
+      font-size: 11px;
+      padding: 6px 10px;
+      border-radius: var(--radius);
+      margin-bottom: 8px;
+      display: none;
+    }
+    .status-bar.info  { background: var(--green-pale); color: var(--green-mid); border: 1px solid var(--line); display: block; }
+    .status-bar.error { background: var(--red-light); color: var(--red); border: 1px solid #f5c0c0; display: block; }
+    .status-bar.running { background: #f0f7ff; color: #1a5da0; border: 1px solid #b8d4f0; display: block; }
+
+    /* ── Progress ───────────────────────────────────────────────── */
+    .progress-wrap { display: none; margin-bottom: 10px; }
+    .progress-wrap.active { display: block; }
+    .progress-track {
+      height: 4px;
+      background: var(--line);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--green-bright);
+      border-radius: 2px;
+      transition: width .3s ease;
+      width: 0%;
+    }
+    .progress-label { font-size: 10px; color: var(--ink-faint); margin-top: 4px; }
+
+    /* ── Layer checklist ────────────────────────────────────────── */
+    .layer-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+    .layer-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: var(--radius);
+      font-size: 11px;
+      color: var(--ink-mid);
+      border: 1px solid transparent;
+    }
+    .layer-item.found   { background: var(--green-pale); border-color: var(--line); color: var(--green-dark); }
+    .layer-item.absent  { background: #fafafa; border-color: #ebebeb; color: var(--ink-faint); }
+    .layer-item.missing { background: #fff8ee; border-color: #f5dfa0; color: #7a5200; }
+    .layer-dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .layer-item.found   .layer-dot { background: var(--green-bright); }
+    .layer-item.absent  .layer-dot { background: #ccc; }
+    .layer-item.missing .layer-dot { background: var(--amber); }
+    .layer-count {
+      margin-left: auto;
+      font-weight: bold;
+      font-size: 11px;
+    }
+
+    /* ── Report ─────────────────────────────────────────────────── */
+    .report-box {
+      display: none;
+      border: 1px solid var(--green-bright);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .report-box.visible { display: block; }
+    .report-header {
+      background: var(--green-dark);
+      color: #fff;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .report-header span { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; }
+    .report-actions { display: flex; gap: 6px; }
+    .report-action-btn {
+      padding: 3px 10px;
+      font-size: 11px;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,.3);
+      background: transparent;
+      color: #fff;
+      cursor: pointer;
+      font-family: 'Georgia', serif;
+      transition: background .15s;
+    }
+    .report-action-btn:hover { background: rgba(255,255,255,.15); }
+    .report-action-btn.copied { background: var(--green-bright); border-color: var(--green-bright); color: var(--green-dark); }
+    .report-body {
+      padding: 14px;
+      font-size: 12.5px;
+      line-height: 1.8;
+      color: var(--ink);
+      background: var(--surface);
+    }
+
+    /* ── Reset ──────────────────────────────────────────────────── */
+    .reset-btn {
+      width: 100%;
+      padding: 7px;
+      font-size: 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--ink-faint);
+      cursor: pointer;
+      font-family: 'Georgia', serif;
+      transition: all .15s;
+      margin-top: 6px;
+    }
+    .reset-btn:hover { border-color: var(--red); color: var(--red); }
+
+    /* ── Map selecting overlay ──────────────────────────────────── */
+    #selectOverlay {
+      position: absolute;
+      top: 12px; left: 50%;
+      transform: translateX(-50%);
+      background: var(--green-dark);
+      color: #fff;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-family: 'Georgia', serif;
+      pointer-events: none;
+      display: none;
+      z-index: 5;
+      box-shadow: var(--shadow-lg);
+      white-space: nowrap;
+    }
+    #selectOverlay.active { display: block; animation: fadeDown .2s ease; }
+    @keyframes fadeDown {
+      from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ───────────────────────────────────────────────────────────── -->
+<header>
+  <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+    <circle cx="14" cy="14" r="13" stroke="#52b788" stroke-width="1.5"/>
+    <circle cx="14" cy="14" r="7" stroke="#52b788" stroke-width="1" stroke-dasharray="2 2"/>
+    <circle cx="14" cy="14" r="3" fill="#52b788"/>
+    <line x1="14" y1="1" x2="14" y2="5" stroke="#52b788" stroke-width="1.5"/>
+    <line x1="14" y1="23" x2="14" y2="27" stroke="#52b788" stroke-width="1.5"/>
+    <line x1="1" y1="14" x2="5" y2="14" stroke="#52b788" stroke-width="1.5"/>
+    <line x1="23" y1="14" x2="27" y2="14" stroke="#52b788" stroke-width="1.5"/>
+  </svg>
+  <div>
+    <h1><strong>Ecological Screening Tool</strong></h1>
+    <p>National Open Access Datasets · ArcGIS Online</p>
+  </div>
+</header>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- Panel -->
+  <div class="panel">
+    <div class="panel-inner">
+
+      <!-- Config note — update with your web map ID -->
+      <div class="config-note">
+        <strong>Setup required:</strong> Edit the <code>CONFIG</code> block at the top
+        of this file's <code>&lt;script&gt;</code> to set your
+        <strong>Web Map ID</strong> and match your layer titles.
+      </div>
+
+      <!-- Buffer -->
+      <div class="section-label">Buffer distance</div>
+      <div class="buffer-row">
+        <input type="number" id="bufferInput" value="2" min="0.1" max="20" step="0.5" />
+        <span>km</span>
+      </div>
+      <div class="preset-row">
+        <button class="preset-btn" data-km="0.5">0.5 km</button>
+        <button class="preset-btn active" data-km="2">2 km</button>
+        <button class="preset-btn" data-km="5">5 km</button>
+        <button class="preset-btn" data-km="10">10 km</button>
+      </div>
+
+      <!-- Steps -->
+      <div class="section-label">Steps</div>
+      <div id="statusBar" class="status-bar"></div>
+
+      <button class="step-btn btn-select" id="btnSelect" onclick="startSelection()">
+        <span class="step-num">1</span>
+        <span id="btnSelectLabel">Select red line boundary</span>
+      </button>
+
+      <button class="step-btn btn-run" id="btnRun" disabled onclick="runAnalysis()">
+        <span class="step-num">2</span>
+        <span id="btnRunLabel">Run ecological screening</span>
+      </button>
+
+      <!-- Progress -->
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-track"><div class="progress-bar" id="progressBar"></div></div>
+        <div class="progress-label" id="progressLabel">Querying layers…</div>
+      </div>
+
+      <!-- Layer results -->
+      <div id="layerResults" style="display:none">
+        <div class="section-label">Layer results</div>
+        <div class="layer-list" id="layerList"></div>
+      </div>
+
+      <!-- Report -->
+      <div class="report-box" id="reportBox">
+        <div class="report-header">
+          <span>Screening Report</span>
+          <div class="report-actions">
+            <button class="report-action-btn" id="btnCopy" onclick="copyReport()">Copy</button>
+            <button class="report-action-btn" onclick="resetTool()">Reset</button>
+          </div>
+        </div>
+        <div class="report-body" id="reportBody"></div>
+      </div>
+
+      <button class="reset-btn" id="btnReset" style="display:none" onclick="resetTool()">
+        ↺ Start new screening
+      </button>
+
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="viewDiv">
+    <div id="selectOverlay">Click a red line boundary feature on the map</div>
+  </div>
+</div>
+
+<!-- ── Script ────────────────────────────────────────────────────────────── -->
+<script>
+require([
+  "esri/Map",
+  "esri/views/MapView",
+  "esri/WebMap",
+  "esri/geometry/geometryEngine",
+  "esri/geometry/projection",
+  "esri/geometry/SpatialReference",
+  "esri/Graphic",
+  "esri/rest/query",
+  "esri/rest/support/Query",
+  "esri/identity/OAuthInfo",
+  "esri/identity/IdentityManager",
+], function(
+  Map, MapView, WebMap,
+  geometryEngine, projection, SpatialReference,
+  Graphic, queryREST, Query,
+  OAuthInfo, IdentityManager
+) {
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // ██  CONFIG — EDIT THIS SECTION
+  // ══════════════════════════════════════════════════════════════════════════
+  const CONFIG = {
+
+    // Your ArcGIS Online portal URL (leave as-is for ArcGIS Online)
+    portalUrl: "https://www.arcgis.com",
+
+    // The Item ID of your web map (from the URL when viewing in Map Viewer)
+    webMapId: "YOUR_WEB_MAP_ITEM_ID",
+
+    // Optional: your ArcGIS Online App ID for OAuth login
+    // Create one at: ArcGIS Online > Content > New Item > Application
+    // Leave blank to use public/anonymous access
+    appId: "",
+
+    // Layer title regex — matches any layer whose title contains these patterns.
+    // The tool will hit-test only these layers when the user clicks the map.
+    redLineTitlePattern: /red.?line|site.?boundar|application.?boundar/i,
+
+    // Ecological layers to query.
+    // title        — must exactly match the layer title in your web map
+    // shortName    — used in the report text
+    // nameField    — the attribute field holding the feature/designation name
+    // type         — "statutory" | "habitat" | "records"
+    // groupByField — true: summarise unique values of nameField (good for PHI habitat types)
+    // maxList      — max number of names to spell out in the report sentence
+    layers: [
+      { title: "Sites of Special Scientific Interest (SSSI)",
+        shortName: "Sites of Special Scientific Interest (SSSIs)",
+        nameField: "SSSI_NAME", type: "statutory" },
+
+      { title: "Special Areas of Conservation (SAC)",
+        shortName: "Special Areas of Conservation (SACs)",
+        nameField: "SAC_NAME", type: "statutory" },
+
+      { title: "Special Protection Areas (SPA)",
+        shortName: "Special Protection Areas (SPAs)",
+        nameField: "SPA_NAME", type: "statutory" },
+
+      { title: "Ramsar Sites",
+        shortName: "Ramsar wetland sites",
+        nameField: "RAMSAR_NAME", type: "statutory" },
+
+      { title: "Local Nature Reserves (LNR)",
+        shortName: "Local Nature Reserves (LNRs)",
+        nameField: "LNR_NAME", type: "statutory" },
+
+      { title: "Ancient Woodland",
+        shortName: "ancient woodland",
+        nameField: "NAME", type: "habitat" },
+
+      { title: "Priority Habitat Inventory",
+        shortName: "Priority Habitat Inventory parcels",
+        nameField: "Main_Habit", type: "habitat",
+        groupByField: true, maxList: 6 },
+
+      { title: "iNaturalist Records",
+        shortName: "iNaturalist biodiversity records",
+        nameField: "species_name", type: "records",
+        maxList: 5 },
+    ],
+  };
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // ── Auth (optional) ───────────────────────────────────────────────────────
+  if (CONFIG.appId) {
+    const info = new OAuthInfo({ appId: CONFIG.appId, portalUrl: CONFIG.portalUrl, popup: false });
+    IdentityManager.registerOAuthInfos([info]);
+  }
+
+  // ── Map & View ────────────────────────────────────────────────────────────
+  const webMap = new WebMap({ portalItem: { id: CONFIG.webMapId, portal: { url: CONFIG.portalUrl } } });
+  const view = new MapView({
+    container: "viewDiv",
+    map: webMap,
+    ui: { components: ["zoom", "compass", "attribution"] },
+  });
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let clickHandler  = null;
+  let selectedGeom  = null;
+  let bufferGraphic = null;
+
+  // ── Buffer preset buttons ─────────────────────────────────────────────────
+  document.querySelectorAll(".preset-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById("bufferInput").value = btn.dataset.km;
+    });
+  });
+  document.getElementById("bufferInput").addEventListener("input", function() {
+    document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+    const match = document.querySelector(`.preset-btn[data-km="${this.value}"]`);
+    if (match) match.classList.add("active");
+  });
+
+  // ── Selection ─────────────────────────────────────────────────────────────
+  window.startSelection = function() {
+    resetState(false);
+    setStatus("selecting");
+    document.getElementById("btnSelect").classList.add("selecting");
+    document.getElementById("btnSelectLabel").textContent = "Click boundary on map…";
+    document.getElementById("selectOverlay").classList.add("active");
+    view.cursor = "crosshair";
+
+    if (clickHandler) clickHandler.remove();
+    clickHandler = view.on("click", async event => {
+      // Find candidate red line layers
+      const redLayers = webMap.layers
+        .filter(l => CONFIG.redLineTitlePattern.test(l.title))
+        .toArray();
+
+      const hitResult = await view.hitTest(event, { include: redLayers.length ? redLayers : undefined });
+      const hit = hitResult.results.find(r => r.graphic && r.graphic.geometry);
+
+      if (!hit) {
+        setStatus("error", "No boundary feature found at that location. Try clicking directly on the red line.");
+        endSelection();
+        return;
+      }
+
+      selectedGeom = hit.graphic.geometry;
+      endSelection();
+      setStatus("info", "✓ Boundary selected — ready to run screening.");
+      document.getElementById("btnSelect").classList.add("selected");
+      document.getElementById("btnSelectLabel").textContent = "✓ Boundary selected";
+      document.getElementById("btnRun").disabled = false;
+    });
+  };
+
+  function endSelection() {
+    if (clickHandler) { clickHandler.remove(); clickHandler = null; }
+    document.getElementById("btnSelect").classList.remove("selecting");
+    document.getElementById("selectOverlay").classList.remove("active");
+    view.cursor = "default";
+  }
+
+  // ── Analysis ──────────────────────────────────────────────────────────────
+  window.runAnalysis = async function() {
+    if (!selectedGeom) return;
+
+    const bufferKm = parseFloat(document.getElementById("bufferInput").value) || 2;
+
+    document.getElementById("btnRun").disabled = true;
+    document.getElementById("btnRunLabel").textContent = "Running…";
+    document.getElementById("layerResults").style.display = "none";
+    document.getElementById("reportBox").classList.remove("visible");
+
+    setStatus("running", "Building buffer and querying layers…");
+    showProgress(0, "Projecting geometry…");
+
+    // ── Load projection module & buffer ─────────────────────────────────────
+    await projection.load();
+
+    const bng = new SpatialReference({ wkid: 27700 });
+    let geom = selectedGeom;
+    try {
+      const projected = projection.project(geom, bng);
+      if (projected) geom = projected;
+    } catch(e) { /* fall through — buffer still works in web mercator */ }
+
+    const bufferMetres = bufferKm * 1000;
+    const bufGeom = geometryEngine.geodesicBuffer(geom, bufferMetres, "meters");
+
+    if (!bufGeom) {
+      setStatus("error", "Failed to create buffer. Check the geometry of the selected feature.");
+      resetRunButton();
+      return;
+    }
+
+    // Draw buffer
+    if (bufferGraphic) view.graphics.remove(bufferGraphic);
+    bufferGraphic = new Graphic({
+      geometry: bufGeom,
+      symbol: {
+        type: "simple-fill",
+        color: [0, 110, 60, 0.06],
+        outline: { color: [0, 110, 60, 0.65], width: 1.5, style: "dash" },
+      },
+    });
+    view.graphics.add(bufferGraphic);
+    view.goTo({ target: bufGeom, padding: { top: 40, bottom: 40, left: 40, right: 40 } });
+
+    // ── Query all layers in parallel ─────────────────────────────────────────
+    const total = CONFIG.layers.length;
+    let done = 0;
+    const results = {};
+
+    const promises = CONFIG.layers.map(async cfg => {
+      const layer = webMap.layers.find(l => l.title === cfg.title);
+
+      if (!layer) {
+        results[cfg.title] = { status: "missing", cfg };
+        update();
+        return;
+      }
+
+      // Build service URL
+      let url = layer.url;
+      if (layer.layerId !== undefined && layer.layerId !== null) url += `/${layer.layerId}`;
+      else if (layer.sublayers && layer.sublayers.length) url += `/0`;
+
+      try {
+        const q = new Query({
+          geometry: bufGeom,
+          spatialRelationship: "intersects",
+          outFields: [cfg.nameField],
+          returnGeometry: false,
+          num: 500,
+        });
+        const fs = await queryREST.executeQueryJSON(url, q);
+        const rawNames = (fs.features || [])
+          .map(f => f.attributes[cfg.nameField])
+          .filter(Boolean);
+        const unique = [...new Set(rawNames)];
+
+        results[cfg.title] = {
+          status: fs.features.length > 0 ? "found" : "absent",
+          count: fs.features.length,
+          names: unique,
+          cfg,
+        };
+      } catch(e) {
+        results[cfg.title] = { status: "missing", cfg, error: e.message };
+      }
+      update();
+    });
+
+    function update() {
+      done++;
+      const pct = Math.round((done / total) * 100);
+      const remaining = CONFIG.layers.filter(l => !results[l.title]);
+      const nextName = remaining.length ? remaining[0].title.split("(")[0].trim() : "Finalising…";
+      showProgress(pct, `Querying: ${nextName}`);
+    }
+
+    await Promise.all(promises);
+
+    hideProgress();
+    renderLayerList(results);
+    const report = buildReport(results, bufferKm);
+    renderReport(report);
+    setStatus("info", `✓ Screening complete — ${CONFIG.layers.filter(l => results[l.title]?.status === "found").length} layer(s) with intersecting features.`);
+    resetRunButton();
+    document.getElementById("btnReset").style.display = "block";
+  };
+
+  // ── Layer results list ────────────────────────────────────────────────────
+  function renderLayerList(results) {
+    const list = document.getElementById("layerList");
+    list.innerHTML = "";
+
+    CONFIG.layers.forEach(cfg => {
+      const r = results[cfg.title];
+      if (!r) return;
+      const item = document.createElement("div");
+      item.className = `layer-item ${r.status}`;
+
+      const dot = document.createElement("span");
+      dot.className = "layer-dot";
+
+      const name = document.createElement("span");
+      name.textContent = cfg.title.replace(/\(.*?\)/g, "").trim();
+
+      item.appendChild(dot);
+      item.appendChild(name);
+
+      if (r.status === "found") {
+        const count = document.createElement("span");
+        count.className = "layer-count";
+        count.textContent = r.count;
+        item.appendChild(count);
+      } else if (r.status === "missing") {
+        const tag = document.createElement("span");
+        tag.className = "layer-count";
+        tag.style.color = "#8a6200";
+        tag.textContent = "not found";
+        item.appendChild(tag);
+      }
+
+      list.appendChild(item);
+    });
+
+    document.getElementById("layerResults").style.display = "block";
+  }
+
+  // ── Report paragraph builder ──────────────────────────────────────────────
+  function buildReport(results, bufferKm) {
+    const bufLabel = bufferKm >= 1 ? `${bufferKm} km` : `${bufferKm * 1000} m`;
+    const date = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+
+    const found   = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "found");
+    const absent  = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "absent");
+    const missing = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing");
+
+    let para = `A ${bufLabel} buffer was applied to the red line boundary of the application site and interrogated against national open access ecological datasets on ${date}. `;
+
+    if (found.length === 0) {
+      para += `No statutory designated sites, priority habitats, or notable biodiversity records were identified within the ${bufLabel} search radius.`;
+      if (missing.length) para += ` Note: the following layers could not be queried and should be checked manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`;
+      return para;
+    }
+
+    // Statutory designations
+    const statutory = found.filter(r => r.cfg.type === "statutory");
+    if (statutory.length) {
+      para += `The following statutory nature conservation designations were recorded within the ${bufLabel} buffer: `;
+      const items = statutory.map(r => {
+        const n = r.cfg.maxList || 4;
+        return `${r.count} ${r.cfg.shortName} (${nameList(r.names, n)})`;
+      });
+      para += oxfordList(items) + ". ";
+    }
+
+    // Habitats
+    const habitats = found.filter(r => r.cfg.type === "habitat");
+    if (habitats.length) {
+      para += "In terms of designated and priority habitats, ";
+      const items = habitats.map(r => {
+        const n = r.cfg.maxList || 5;
+        if (r.cfg.groupByField) {
+          return `${r.count} ${r.cfg.shortName} were identified, comprising ${nameList(r.names, n)}`;
+        }
+        return `${r.count} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} recorded (${nameList(r.names, n)})`;
+      });
+      para += oxfordList(items) + ". ";
+    }
+
+    // Records
+    const records = found.filter(r => r.cfg.type === "records");
+    records.forEach(r => {
+      const n = r.cfg.maxList || 5;
+      para += `A total of ${r.count} ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} retrieved within the buffer`;
+      if (r.names.length) para += `, including records of ${nameList(r.names, n)}`;
+      para += ". ";
+    });
+
+    // Absent layers
+    const absentNames = absent.map(r => r.cfg.shortName);
+    if (absentNames.length && absentNames.length <= 5) {
+      para += `No ${oxfordList(absentNames)} ${absentNames.length === 1 ? "was" : "were"} recorded within the search area. `;
+    }
+
+    // Missing layers warning
+    if (missing.length) {
+      para += `Note: the following layers could not be queried and should be verified manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`;
+    }
+
+    return para.trim();
+  }
+
+  function nameList(names, max) {
+    if (!names || !names.length) return "unnamed features";
+    const capped = names.slice(0, max);
+    const rem = names.length - max;
+    let s = capped.map(n => `'${n}'`).join(", ");
+    if (rem > 0) s += ` and ${rem} other${rem > 1 ? "s" : ""}`;
+    return s;
+  }
+
+  function oxfordList(items) {
+    if (!items.length) return "";
+    if (items.length === 1) return items[0];
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return items.slice(0, -1).join(", ") + ", and " + items[items.length - 1];
+  }
+
+  // ── Render report ─────────────────────────────────────────────────────────
+  function renderReport(text) {
+    document.getElementById("reportBody").textContent = text;
+    document.getElementById("reportBox").classList.add("visible");
+    document.getElementById("reportBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // ── Copy ──────────────────────────────────────────────────────────────────
+  window.copyReport = function() {
+    const text = document.getElementById("reportBody").textContent;
+    navigator.clipboard.writeText(text).catch(() => {
+      const el = document.createElement("textarea");
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+    });
+    const btn = document.getElementById("btnCopy");
+    btn.textContent = "✓ Copied";
+    btn.classList.add("copied");
+    setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2000);
+  };
+
+  // ── Reset ─────────────────────────────────────────────────────────────────
+  window.resetTool = function() {
+    resetState(true);
+  };
+
+  function resetState(full) {
+    if (clickHandler) { clickHandler.remove(); clickHandler = null; }
+    if (full) {
+      selectedGeom = null;
+      if (bufferGraphic) { view.graphics.remove(bufferGraphic); bufferGraphic = null; }
+      document.getElementById("btnSelect").classList.remove("selecting", "selected");
+      document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
+      document.getElementById("btnRun").disabled = true;
+      document.getElementById("btnRunLabel").textContent = "Run ecological screening";
+      document.getElementById("layerResults").style.display = "none";
+      document.getElementById("reportBox").classList.remove("visible");
+      document.getElementById("btnReset").style.display = "none";
+      hideProgress();
+      clearStatus();
+    }
+    view.cursor = "default";
+    document.getElementById("selectOverlay").classList.remove("active");
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function setStatus(type, msg) {
+    const el = document.getElementById("statusBar");
+    el.className = `status-bar ${type}`;
+    el.textContent = msg;
+  }
+  function clearStatus() {
+    const el = document.getElementById("statusBar");
+    el.className = "status-bar";
+    el.textContent = "";
+  }
+  function showProgress(pct, label) {
+    document.getElementById("progressWrap").classList.add("active");
+    document.getElementById("progressBar").style.width = pct + "%";
+    document.getElementById("progressLabel").textContent = label;
+  }
+  function hideProgress() {
+    document.getElementById("progressWrap").classList.remove("active");
+  }
+  function resetRunButton() {
+    document.getElementById("btnRun").disabled = false;
+    document.getElementById("btnRunLabel").textContent = "Run ecological screening";
+  }
+
+}); // end require
+</script>
+</body>
+</html>
