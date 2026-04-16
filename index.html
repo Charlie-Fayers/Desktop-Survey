@@ -337,6 +337,77 @@
     }
     .reset-btn:hover { border-color: var(--red); color: var(--red); }
 
+    /* ── Layer panel toggle button ──────────────────────────────── */
+    #layerToggleBtn {
+      position: absolute;
+      top: 12px; right: 12px;
+      z-index: 10;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 12px;
+      font-family: 'Georgia', serif;
+      color: var(--ink-mid);
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: border-color .15s;
+    }
+    #layerToggleBtn:hover { border-color: var(--green-mid); color: var(--green-dark); }
+    #layerToggleBtn.active { background: var(--green-dark); color: #fff; border-color: var(--green-dark); }
+
+    /* ── Layer panel drawer ─────────────────────────────────────── */
+    #layerPanel {
+      position: absolute;
+      top: 0; right: 0;
+      width: 260px;
+      height: 100%;
+      background: var(--surface);
+      border-left: 1px solid var(--line);
+      box-shadow: -4px 0 16px rgba(0,0,0,.08);
+      display: flex;
+      flex-direction: column;
+      z-index: 9;
+      transform: translateX(100%);
+      transition: transform .22s ease;
+    }
+    #layerPanel.open { transform: translateX(0); }
+    .lp-header {
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      font-size: 11px;
+      font-weight: bold;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--ink-faint);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .lp-close { background: none; border: none; cursor: pointer; color: var(--ink-faint); font-size: 16px; line-height: 1; padding: 0 2px; }
+    .lp-close:hover { color: var(--ink); }
+    .lp-body { overflow-y: auto; flex: 1; padding: 8px 0; }
+    .lp-body::-webkit-scrollbar { width: 4px; }
+    .lp-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 2px; }
+    .lp-group-row { display: flex; align-items: center; gap: 6px; padding: 5px 14px; cursor: pointer; user-select: none; }
+    .lp-group-row:hover { background: var(--bg); }
+    .lp-chevron { font-size: 9px; color: var(--ink-faint); transition: transform .15s; flex-shrink: 0; width: 10px; }
+    .lp-chevron.open { transform: rotate(90deg); }
+    .lp-group-check { width: 13px; height: 13px; accent-color: var(--green-mid); flex-shrink: 0; cursor: pointer; }
+    .lp-group-label { font-size: 12px; font-weight: bold; color: var(--ink); flex: 1; }
+    .lp-children { display: none; }
+    .lp-children.open { display: block; }
+    .lp-layer-row { display: flex; align-items: center; gap: 6px; padding: 4px 14px 4px 32px; cursor: pointer; }
+    .lp-layer-row:hover { background: var(--bg); }
+    .lp-layer-check { width: 13px; height: 13px; accent-color: var(--green-mid); flex-shrink: 0; cursor: pointer; }
+    .lp-layer-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; border: 1px solid rgba(0,0,0,.12); }
+    .lp-layer-label { font-size: 11px; color: var(--ink-mid); flex: 1; line-height: 1.3; }
+    .lp-layer-row.wms .lp-layer-label { font-style: italic; color: var(--ink-faint); }
+
     /* ── Map selecting overlay ──────────────────────────────────── */
     #selectOverlay {
       position: absolute;
@@ -448,6 +519,28 @@
   <!-- Map -->
   <div id="viewDiv">
     <div id="selectOverlay">Click a red line boundary feature on the map</div>
+
+    <!-- Layer panel toggle -->
+    <button id="layerToggleBtn" onclick="toggleLayerPanel()">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="1" y="1" width="5" height="5" rx="1"/>
+        <rect x="8" y="1" width="5" height="5" rx="1"/>
+        <rect x="1" y="8" width="5" height="5" rx="1"/>
+        <rect x="8" y="8" width="5" height="5" rx="1"/>
+      </svg>
+      Layers
+    </button>
+
+    <!-- Layer panel drawer -->
+    <div id="layerPanel">
+      <div class="lp-header">
+        <span>Map Layers</span>
+        <button class="lp-close" onclick="toggleLayerPanel()">&#x2715;</button>
+      </div>
+      <div class="lp-body" id="layerPanelBody">
+        <div style="padding:14px;font-size:11px;color:var(--ink-faint)">Loading layers…</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -651,7 +744,137 @@ require([
     container: "viewDiv",
     map: webMap,
     ui: { components: ["zoom", "compass", "attribution"] },
+    popup: { autoOpenEnabled: false },  // suppress all popups
   });
+
+  // Once the map loads, make all group layers and their children visible
+  // so they can be queried even if turned off by default in the web map
+  view.when(() => {
+    function enableLayer(layer) {
+      layer.visible = true;
+      if (layer.layers) layer.layers.forEach(enableLayer);
+    }
+    webMap.layers.forEach(enableLayer);
+
+    // Build layer panel
+    buildLayerPanel();
+  });
+
+  // ── Layer panel ───────────────────────────────────────────────────────────
+  window.toggleLayerPanel = function() {
+    const panel = document.getElementById("layerPanel");
+    const btn   = document.getElementById("layerToggleBtn");
+    panel.classList.toggle("open");
+    btn.classList.toggle("active");
+  };
+
+  function buildLayerPanel() {
+    const body = document.getElementById("layerPanelBody");
+    body.innerHTML = "";
+
+    // Render layers in reverse so top layers appear first (matches map draw order)
+    const allLayers = webMap.layers.toArray().slice().reverse();
+    allLayers.forEach(layer => renderLayerRow(layer, body, 0));
+  }
+
+  function renderLayerRow(layer, container, depth) {
+    const isGroup = layer.type === "group";
+    const isWms   = layer.type === "wms" || layer.type === "wmts";
+
+    if (isGroup) {
+      // ── Group row ──────────────────────────────────────────────
+      const groupDiv = document.createElement("div");
+
+      const row = document.createElement("div");
+      row.className = "lp-group-row";
+
+      const chevron = document.createElement("span");
+      chevron.className = "lp-chevron open";
+      chevron.textContent = "▶";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "lp-group-check";
+      check.checked = layer.visible;
+      check.addEventListener("change", e => {
+        e.stopPropagation();
+        layer.visible = check.checked;
+        // Sync child checkboxes
+        children.querySelectorAll("input[type=checkbox]").forEach(cb => {
+          cb.checked = check.checked;
+        });
+        // Sync child layer visibility
+        if (layer.layers) layer.layers.forEach(l => l.visible = check.checked);
+      });
+
+      const label = document.createElement("span");
+      label.className = "lp-group-label";
+      label.textContent = layer.title;
+
+      row.appendChild(chevron);
+      row.appendChild(check);
+      row.appendChild(label);
+
+      const children = document.createElement("div");
+      children.className = "lp-children open";
+
+      // Toggle expand/collapse on row click (not checkbox)
+      row.addEventListener("click", e => {
+        if (e.target === check) return;
+        children.classList.toggle("open");
+        chevron.classList.toggle("open");
+      });
+
+      groupDiv.appendChild(row);
+      groupDiv.appendChild(children);
+      container.appendChild(groupDiv);
+
+      // Render children in reverse order
+      if (layer.layers) {
+        const childArr = layer.layers.toArray().slice().reverse();
+        childArr.forEach(child => renderLayerRow(child, children, depth + 1));
+      }
+
+    } else {
+      // ── Leaf layer row ─────────────────────────────────────────
+      const row = document.createElement("div");
+      row.className = "lp-layer-row" + (isWms ? " wms" : "");
+      row.style.paddingLeft = (14 + depth * 14) + "px";
+
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.className = "lp-layer-check";
+      check.checked = layer.visible;
+      check.addEventListener("change", () => { layer.visible = check.checked; });
+
+      // Colour swatch — try to get renderer colour
+      const swatch = document.createElement("span");
+      swatch.className = "lp-layer-swatch";
+      try {
+        const sym = layer.renderer?.symbol || layer.renderer?.defaultSymbol;
+        const col = sym?.color;
+        if (col) swatch.style.background = `rgba(${col.r},${col.g},${col.b},${col.a ?? 1})`;
+        else swatch.style.background = "#aaa";
+      } catch(e) { swatch.style.background = "#aaa"; }
+
+      const label = document.createElement("span");
+      label.className = "lp-layer-label";
+      label.textContent = layer.title + (isWms ? " (WMS)" : "");
+
+      row.appendChild(check);
+      row.appendChild(swatch);
+      row.appendChild(label);
+
+      // Clicking the row (not checkbox) also toggles
+      row.addEventListener("click", e => {
+        if (e.target === check) return;
+        check.checked = !check.checked;
+        layer.visible = check.checked;
+      });
+
+      container.appendChild(row);
+    }
+  }
 
   // ── State ─────────────────────────────────────────────────────────────────
   let clickHandler  = null;
@@ -683,10 +906,18 @@ require([
 
     if (clickHandler) clickHandler.remove();
     clickHandler = view.on("click", async event => {
-      // Find candidate red line layers
-      const redLayers = webMap.layers
-        .filter(l => CONFIG.redLineTitlePattern.test(l.title))
-        .toArray();
+      // Suppress default popup
+      event.stopPropagation();
+
+      // Find red line layers recursively through groups
+      const redLayers = [];
+      function collectRedLayers(layers) {
+        layers.forEach(l => {
+          if (CONFIG.redLineTitlePattern.test(l.title)) redLayers.push(l);
+          if (l.type === "group" && l.layers) collectRedLayers(l.layers);
+        });
+      }
+      collectRedLayers(webMap.layers);
 
       const hitResult = await view.hitTest(event, { include: redLayers.length ? redLayers : undefined });
       const hit = hitResult.results.find(r => r.graphic && r.graphic.geometry);
