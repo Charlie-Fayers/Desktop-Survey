@@ -1422,21 +1422,78 @@ require([
   // ── Copy ──────────────────────────────────────────────────────────────────
   window.copyReport = function() {
     const el = document.getElementById("reportBody");
-    // Copy as plain text — strip HTML tags
-    const text = el.innerText || el.textContent;
-    navigator.clipboard.writeText(text).catch(() => {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
+
+    // ── Build styled HTML for clipboard (Word-compatible) ─────────────────
+    const styledHtml = `
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body, p, td, th, li, h2, h3 {
+    font-family: 'Century Gothic', 'Avant Garde', sans-serif;
+  }
+  body { font-size: 9pt; }
+  h2 { font-size: 9pt; font-weight: bold; margin: 12pt 0 4pt; }
+  h3 { font-size: 9pt; font-weight: bold; margin: 8pt 0 4pt; }
+  p  { font-size: 9pt; margin: 0 0 6pt; }
+  .para-num { font-weight: bold; margin-right: 6pt; }
+  table { border-collapse: collapse; width: 100%; font-size: 8pt; margin: 6pt 0 12pt; }
+  th { background-color: #1a3d2b; color: white; padding: 4pt 6pt; text-align: left; font-size: 8pt; font-weight: normal; }
+  td { padding: 4pt 6pt; border: 1pt solid #c9dece; vertical-align: top; font-size: 8pt; }
+  tr:nth-child(even) td { background-color: #f4f9f5; }
+  ul { margin: 4pt 0 6pt 14pt; padding: 0; font-size: 9pt; }
+  li { margin-bottom: 2pt; font-size: 9pt; }
+  .badge { font-size: 8pt; font-weight: bold; }
+  .badge-intl  { color: #1a3d2b; }
+  .badge-natl  { color: #1a3a6b; }
+  .badge-local { color: #7a5200; }
+  .placeholder { color: #8a6200; font-style: italic; }
+  .citation-link { color: #2d6a4f; font-size: 8pt; }
+</style>
+</head>
+<body>
+${el.innerHTML}
+</body>
+</html>`;
+
+    // ── Write to clipboard as both HTML and plain text ─────────────────────
+    const plainText = el.innerText;
+
+    if (window.ClipboardItem) {
+      const htmlBlob  = new Blob([styledHtml], { type: "text/html" });
+      const textBlob  = new Blob([plainText],  { type: "text/plain" });
+      const item = new ClipboardItem({ "text/html": htmlBlob, "text/plain": textBlob });
+      navigator.clipboard.write([item]).then(() => {
+        flashCopied();
+      }).catch(() => {
+        // Fallback to plain text
+        navigator.clipboard.writeText(plainText).then(flashCopied);
+      });
+    } else {
+      // Older browser fallback — execCommand with styled content
+      const tmp = document.createElement("div");
+      tmp.innerHTML = styledHtml;
+      tmp.style.position = "fixed";
+      tmp.style.opacity  = "0";
+      document.body.appendChild(tmp);
+      const range = document.createRange();
+      range.selectNodeContents(tmp);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
       document.execCommand("copy");
-      document.body.removeChild(ta);
-    });
+      sel.removeAllRanges();
+      document.body.removeChild(tmp);
+      flashCopied();
+    }
+  };
+
+  function flashCopied() {
     const btn = document.getElementById("btnCopy");
     btn.textContent = "✓ Copied";
     btn.classList.add("copied");
     setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2000);
-  };
+  }
 
   // ── Reset ─────────────────────────────────────────────────────────────────
   window.resetTool = function() {
