@@ -1363,17 +1363,46 @@ require([
     return `approx. ${(distM/1000).toFixed(1)}km ${dir || ""} of the site at its nearest point`;
   }
 
+  // ── Wales detection ───────────────────────────────────────────────────────
+  // Converts Web Mercator centroid to approximate WGS84 and checks if it
+  // falls within the approximate bounding box of Wales.
+  function isInWales(geom) {
+    if (!geom || !geom.extent) return false;
+    const cx = (geom.extent.xmin + geom.extent.xmax) / 2;
+    const cy = (geom.extent.ymin + geom.extent.ymax) / 2;
+    // Web Mercator → approximate WGS84
+    const lon = (cx / 20037508.34) * 180;
+    const lat = (Math.atan(Math.exp((cy / 20037508.34) * Math.PI)) * 360 / Math.PI) - 90;
+    // Wales bounding box (approximate): lon -5.35 to -2.65, lat 51.35 to 53.45
+    return lon >= -5.35 && lon <= -2.65 && lat >= 51.35 && lat <= 53.45;
+  }
+
   // ── Main report builder (async — calculates distances) ────────────────────
   async function buildReport(results, bufferKm, rlbGeom) {
     const bufLabel = bufferKm >= 1 ? `${bufferKm}km` : `${bufferKm * 1000}m`;
     const date = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    const inWales = isInWales(rlbGeom);
     let paraNum = 1;
     const P = txt => `<p><span class="para-num">1.1.${paraNum++}</span>${txt}</p>`;
     const ph = txt => `<span class="placeholder">[${txt}]</span>`;
 
-    const found   = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "found");
-    const missing = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing" && !r.cfg.wms);
-    const wms     = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing" && r.cfg.wms);
+    const found   = CONFIG.layers.map(l => results[l.title]).filter(r => {
+      if (!r) return false;
+      if (r.status !== "found") return false;
+      // Exclude Wales layers if site is not in Wales
+      if (!inWales && r.cfg.wms && r.cfg.shortName.includes("Wales")) return false;
+      return true;
+    });
+    const missing = CONFIG.layers.map(l => results[l.title]).filter(r => {
+      if (!r || r.status !== "missing" || r.cfg.wms) return false;
+      return true;
+    });
+    const wms = CONFIG.layers.map(l => results[l.title]).filter(r => {
+      if (!r || r.status !== "missing" || !r.cfg.wms) return false;
+      // Only include Wales WMS layers in the report if site is in Wales
+      if (!inWales && r.cfg.shortName.includes("Wales")) return false;
+      return true;
+    });
 
     let html = `<h2>Desk Study Findings</h2>`;
     html += P(`A ${bufLabel} buffer was applied to the red line boundary (RLB) of the application site and interrogated against national open access ecological datasets on ${date}.`);
@@ -1843,17 +1872,26 @@ require([
     hideSearchResults();
 
     if (result.geometry) {
-      // RLB feature — zoom directly
+      // RLB feature — zoom and auto-select as the active boundary
       view.goTo({ target: result.geometry, zoom: 15 });
+
+      // Auto-select: set as selectedGeom and update UI as if user clicked it
+      selectedGeom = result.geometry;
+      document.getElementById("btnSelect").classList.remove("selecting");
+      document.getElementById("btnSelect").classList.add("selected");
+      document.getElementById("btnSelectLabel").textContent = `✓ ${result.label}`;
+      document.getElementById("btnRun").disabled = false;
+      setStatus("info", `✓ "${result.label}" selected — ready to run desk study.`);
+
     } else if (result.magicKey) {
-      // Geocoded place — get full location
+      // Geocoded place — zoom only
       try {
         const encoded = encodeURIComponent(result.label);
         const resp = await fetch(
           `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?SingleLine=${encoded}&magicKey=${result.magicKey}&outFields=&f=json`
         );
         const data = await resp.json();
-        const loc  = data.candidates?.[0]?.location;
+        const loc = data.candidates?.[0]?.location;
         if (loc) view.goTo({ target: { x: loc.x, y: loc.y, spatialReference: { wkid: 4326 } }, zoom: 14 });
       } catch(e) {}
     }
