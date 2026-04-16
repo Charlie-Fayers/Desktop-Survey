@@ -527,38 +527,38 @@ require([
         shortName: "National Parks",
         nameField: "NAME", type: "statutory", maxList: 4 },
 
-      // ── Wales: statutory designations ────────────────────────────────────
+      // ── Wales: statutory designations (WMS — display only, cannot query) ──
       { title: "SSSI",
         shortName: "Sites of Special Scientific Interest (SSSIs) (Wales)",
-        nameField: "SSSI_NAME", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       { title: "SAC",
         shortName: "Special Areas of Conservation (SACs) (Wales)",
-        nameField: "SAC_NAME", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       { title: "SPA",
         shortName: "Special Protection Areas (SPAs) (Wales)",
-        nameField: "SPA_NAME", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       { title: "RAMSAR",
         shortName: "Ramsar wetland sites (Wales)",
-        nameField: "RAMSAR_NAME", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       { title: "NNR",
         shortName: "National Nature Reserves (NNRs) (Wales)",
-        nameField: "NNR_Name", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       { title: "LNR",
         shortName: "Local Nature Reserves (LNRs) (Wales)",
-        nameField: "LNR_NAME", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       { title: "AONB",
         shortName: "Areas of Outstanding Natural Beauty (AONBs) (Wales)",
-        nameField: "NAME", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       { title: "National Park",
         shortName: "National Parks (Wales)",
-        nameField: "NAME", type: "statutory", maxList: 4 },
+        nameField: null, type: "statutory", wms: true },
 
       // ── England: habitats ─────────────────────────────────────────────────
       { title: "Ancient Woodland (England)",
@@ -570,15 +570,14 @@ require([
         nameField: "Main_Habit", type: "habitat",
         groupByField: true, maxList: 6 },
 
-      // ── Wales: habitats ───────────────────────────────────────────────────
+      // ── Wales: habitats (WMS — display only, cannot query) ───────────────
       { title: "Ancient Woodland",
         shortName: "ancient woodland (Wales)",
-        nameField: "NAME", type: "habitat", maxList: 4 },
+        nameField: null, type: "habitat", wms: true },
 
       { title: "Priority Habitats - High sensitivity (Wales)",
         shortName: "Priority Habitats of high sensitivity (Wales)",
-        nameField: "Hab_Type", type: "habitat",
-        groupByField: true, maxList: 6 },
+        nameField: null, type: "habitat", wms: true },
 
       // ── River habitats ────────────────────────────────────────────────────
       { title: "Priority River Habitat - Rivers (England)",
@@ -792,15 +791,35 @@ require([
     view.goTo({ target: bufGeom, padding: { top: 40, bottom: 40, left: 40, right: 40 } });
 
     // ── Query all layers in parallel ─────────────────────────────────────────
+    // Recursively find a layer by title through group layers
+    function findLayer(layers, title) {
+      for (let i = 0; i < layers.length; i++) {
+        const l = layers.getItemAt(i);
+        if (l.title === title) return l;
+        if (l.type === "group" && l.layers) {
+          const found = findLayer(l.layers, title);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+
     const total = CONFIG.layers.length;
     let done = 0;
     const results = {};
 
     const promises = CONFIG.layers.map(async cfg => {
-      const layer = webMap.layers.find(l => l.title === cfg.title);
+      const layer = findLayer(webMap.layers, cfg.title);
 
       if (!layer) {
         results[cfg.title] = { status: "missing", cfg };
+        update();
+        return;
+      }
+
+      // WMS layers cannot be queried via REST — mark for manual check
+      if (layer.type === "wms" || layer.type === "wmts" || layer.type === "wms-sublayer") {
+        results[cfg.title] = { status: "missing", cfg, error: "WMS layer — cannot query directly" };
         update();
         return;
       }
@@ -901,7 +920,8 @@ require([
 
     const found   = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "found");
     const absent  = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "absent");
-    const missing = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing");
+    const missing = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing" && !r.cfg.wms);
+    const wms     = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing" && r.cfg.wms);
 
     let para = `A ${bufLabel} buffer was applied to the red line boundary of the application site and interrogated against national open access ecological datasets on ${date}. `;
 
@@ -978,7 +998,12 @@ require([
 
     // ── Missing layers warning ──────────────────────────────────────────────
     if (missing.length) {
-      para += `Note: the following layers could not be queried and should be verified manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`;
+      para += `Note: the following layers could not be queried and should be verified manually: ${missing.map(r => r.cfg.shortName).join(", ")}. `;
+    }
+
+    // ── WMS layers note ─────────────────────────────────────────────────────
+    if (wms.length) {
+      para += `The following Welsh designation layers are served as WMS and could not be queried automatically — they should be checked visually in the map: ${wms.map(r => r.cfg.shortName).join(", ")}.`;
     }
 
     return para.trim();
