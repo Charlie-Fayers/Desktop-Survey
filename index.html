@@ -992,8 +992,10 @@ require([
     "Birds Directive",
     "Habitats Directive",
   ];
-  // Designation values to exclude from Red List entries (not actually threatened)
-  const REDLIST_EXCLUDE = ["lc","lc_","not evaluated","ne","not assessed","na","dd"];
+
+  // Only flag BoCC5 red-listed birds — not all red lists
+  // BoCC5 = Birds of Conservation Concern 5 (2021)
+  const BOCC5_MATCH = /bocc5|birds of conservation concern 5/i;
 
   function setJnccStatus(msg, type) {
     const el = document.getElementById("jnccStatus");
@@ -1074,14 +1076,16 @@ require([
         const taxGroup= String(row["Taxon group"] || row["taxon group"] || row["TaxonGroup"] || row["Kingdom"] || "").trim();
 
         const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
-        const isRedList   = /red list/i.test(repCat) && !REDLIST_EXCLUDE.some(x => desig.startsWith(x));
-        if (!isProtected && !isRedList) return;
+        // Only include BoCC5 red-listed birds (Red = threatened category in BoCC5)
+        const isBoCC5Red  = BOCC5_MATCH.test(repCat) && /^red$/i.test(desig.trim());
 
-        const designLabel = isRedList
-          ? `Red List (${row["Designation"] || row["Status"] || ""})`
-          : repCat.replace("Habitats and Species Regulations 2017", "Hab. Regs.")
+        if (!isProtected && !isBoCC5Red) return;
+
+        const designLabel = isBoCC5Red
+          ? "BoCC5 Red List"
+          : repCat.replace("Habitats and Species Regulations 2017", "Hab. Regs. 2017")
                   .replace("Wildlife and Countryside Act 1981", "WCA 1981")
-                  .replace("Protection of Badgers Act 1992", "Badgers Act")
+                  .replace("Protection of Badgers Act 1992", "Badgers Act 1992")
                   .replace("NERC Act S41 (England)", "NERC S41")
                   .replace("NERC Act S42 (Wales)", "NERC S42")
                   .replace("Habitats Directive", "Hab. Dir.")
@@ -1119,8 +1123,10 @@ require([
   view.when(() => {
     buildLayerPanel();
     buildBufferGroups();
-    loadJncc(); // start loading JNCC data in background
   });
+
+  // Start JNCC loading immediately — don't wait for map to be ready
+  loadJncc();
 
   // ── Layer panel ───────────────────────────────────────────────────────────
   window.toggleLayerPanel = function() {
