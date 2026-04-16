@@ -672,6 +672,11 @@
       <div class="section-label">Search distances</div>
       <div id="bufferGroups"></div>
 
+      <!-- JNCC status -->
+      <div id="jnccStatus" style="font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;background:#f0f7ff;border:1px solid #b8d4f0;color:#1a5da0;">
+        ⏳ Loading species protection data…
+      </div>
+
       <!-- Steps -->
       <div class="section-label">Steps</div>
       <div id="statusBar" class="status-bar"></div>
@@ -982,42 +987,58 @@ require([
   // Designation values to exclude from Red List entries (not actually threatened)
   const REDLIST_EXCLUDE = ["lc","lc_","not evaluated","ne","not assessed","na","dd"];
 
+  function setJnccStatus(msg, type) {
+    const el = document.getElementById("jnccStatus");
+    if (!el) return;
+    const styles = {
+      loading: "background:#f0f7ff;border-color:#b8d4f0;color:#1a5da0",
+      ok:      "background:#f0faf3;border-color:#c9dece;color:#1a3d2b",
+      warn:    "background:#fffbea;border-color:#f0d060;color:#6b5200",
+      error:   "background:#fff0f0;border-color:#f5c0c0;color:#c00",
+    };
+    el.style.cssText = `font-size:10px;padding:5px 8px;margin-bottom:8px;border-radius:4px;border:1px solid;${styles[type]||styles.loading}`;
+    el.textContent = msg;
+  }
+
   async function loadJncc() {
     if (jnccLookup !== null || jnccLoading) return;
     jnccLoading = true;
 
-    // Wait for SheetJS to be available (it loads asynchronously after Dojo)
+    // Wait for SheetJS to be available
+    setJnccStatus("⏳ Waiting for SheetJS…", "loading");
     let waited = 0;
-    while (typeof XLSX === "undefined" && waited < 10000) {
-      await new Promise(r => setTimeout(r, 200));
-      waited += 200;
+    while (typeof XLSX === "undefined" && waited < 15000) {
+      await new Promise(r => setTimeout(r, 300));
+      waited += 300;
     }
     if (typeof XLSX === "undefined") {
-      console.warn("JNCC: SheetJS not available after 10s");
+      setJnccStatus("✗ SheetJS library failed to load. Species cross-referencing unavailable.", "error");
       jnccLookup = {};
       jnccLoading = false;
       return;
     }
 
     try {
-      console.log("JNCC: fetching spreadsheet…");
+      setJnccStatus("⏳ Fetching JNCC species data (7MB)…", "loading");
       const resp = await fetch(JNCC_URL);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const buf  = await resp.arrayBuffer();
-      console.log(`JNCC: downloaded ${(buf.byteLength/1024/1024).toFixed(1)}MB, parsing…`);
-      const wb   = XLSX.read(buf, { type: "array" });
-      console.log("JNCC: sheets:", wb.SheetNames);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} — is jncc.xlsx in the GitHub repo?`);
 
-      // Find the Master List sheet
+      setJnccStatus("⏳ Parsing spreadsheet…", "loading");
+      const buf  = await resp.arrayBuffer();
+      const wb   = XLSX.read(buf, { type: "array" });
+
       const sheetName = wb.SheetNames.find(n => /master/i.test(n)) || wb.SheetNames[0];
-      console.log("JNCC: using sheet:", sheetName);
+      if (!sheetName) throw new Error("No sheet found in workbook");
+
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
-      console.log(`JNCC: ${rows.length} rows, sample cols:`, rows[0] ? Object.keys(rows[0]).join(", ") : "none");
+      if (!rows.length) throw new Error("Sheet is empty");
+
+      // Log sample columns for debugging
+      const sampleCols = rows[0] ? Object.keys(rows[0]).join(", ") : "none";
+      setJnccStatus(`⏳ Building lookup (${rows.length} rows)…`, "loading");
 
       const lookup = {};
-
       rows.forEach(row => {
-        // Try multiple possible column name variations
         const repCat  = String(row["Reporting category"] || row["reporting category"] || row["RepCat"] || "").trim();
         const desig   = String(row["Designation"] || row["designation"] || row["Status"] || "").trim().toLowerCase();
         const taxName = String(row["Recommended taxon name"] || row["Taxon name"] || row["taxon name"] || "").trim().toLowerCase();
@@ -1026,7 +1047,6 @@ require([
 
         const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
         const isRedList   = /red list/i.test(repCat) && !REDLIST_EXCLUDE.some(x => desig.startsWith(x));
-
         if (!isProtected && !isRedList) return;
 
         const designLabel = isRedList
@@ -1047,10 +1067,11 @@ require([
 
       Object.values(lookup).forEach(v => { v.designations = [...v.designations].sort(); });
       jnccLookup = lookup;
-      console.log(`JNCC lookup loaded: ${Object.keys(lookup).length} protected taxa`);
+      const n = Object.keys(lookup).length;
+      setJnccStatus(`✓ Species data ready — ${n.toLocaleString()} protected taxa loaded`, "ok");
 
     } catch(e) {
-      console.warn("JNCC lookup failed:", e.message);
+      setJnccStatus(`✗ Species data failed: ${e.message}`, "error");
       jnccLookup = {};
     }
     jnccLoading = false;
