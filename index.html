@@ -315,11 +315,79 @@
     .report-action-btn.copied { background: var(--green-bright); border-color: var(--green-bright); color: var(--green-dark); }
     .report-body {
       padding: 14px;
-      font-size: 12.5px;
-      line-height: 1.8;
+      font-size: 12px;
+      line-height: 1.7;
       color: var(--ink);
       background: var(--surface);
     }
+    .report-body h2 {
+      font-size: 13px;
+      font-weight: bold;
+      margin: 14px 0 4px;
+      color: var(--ink);
+    }
+    .report-body h3 {
+      font-size: 12px;
+      font-weight: bold;
+      margin: 10px 0 4px;
+      color: var(--ink);
+    }
+    .report-body p {
+      margin: 0 0 8px;
+    }
+    .report-body .para-num {
+      font-weight: bold;
+      margin-right: 6px;
+    }
+    .report-body table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      margin: 8px 0 14px;
+    }
+    .report-body th {
+      background: var(--green-dark);
+      color: #fff;
+      padding: 5px 8px;
+      text-align: left;
+      font-weight: 500;
+    }
+    .report-body td {
+      padding: 5px 8px;
+      border: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .report-body tr:nth-child(even) td { background: var(--bg); }
+    .report-body .badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: bold;
+    }
+    .report-body .badge-intl  { background: #e8f4ed; color: var(--green-dark); }
+    .report-body .badge-natl  { background: #e8f0fb; color: #1a3a6b; }
+    .report-body .badge-local { background: #fef9e7; color: #7a5200; }
+    .report-body .placeholder {
+      background: #fffbea;
+      border: 1px dashed #e0c060;
+      border-radius: 3px;
+      padding: 3px 6px;
+      font-style: italic;
+      color: #8a6200;
+      font-size: 11px;
+    }
+    .report-body .citation-link {
+      font-size: 10px;
+      color: var(--green-mid);
+      text-decoration: none;
+    }
+    .report-body .citation-link:hover { text-decoration: underline; }
+    .report-body ul {
+      margin: 4px 0 8px 16px;
+      padding: 0;
+    }
+    .report-body ul li { margin-bottom: 2px; }
 
     /* ── Reset ──────────────────────────────────────────────────── */
     .reset-btn {
@@ -1033,23 +1101,26 @@ require([
       console.log(`Querying "${cfg.title}" → ${url}`);
 
       try {
+        const outFields = ["*"];
         const q = new Query({
           geometry: bufGeom,
           spatialRelationship: "intersects",
-          outFields: [cfg.nameField],
-          returnGeometry: false,
+          outFields: outFields,
+          returnGeometry: true,
           num: 500,
         });
         const fs = await queryREST.executeQueryJSON(url, q);
-        const rawNames = (fs.features || [])
+        const features = fs.features || [];
+        const rawNames = features
           .map(f => f.attributes[cfg.nameField])
           .filter(Boolean);
         const unique = [...new Set(rawNames)];
 
         results[cfg.title] = {
-          status: fs.features.length > 0 ? "found" : "absent",
-          count: fs.features.length,
+          status: features.length > 0 ? "found" : "absent",
+          count: features.length,
           names: unique,
+          features: features,
           cfg,
         };
       } catch(e) {
@@ -1070,7 +1141,8 @@ require([
 
     hideProgress();
     renderLayerList(results);
-    const report = buildReport(results, bufferKm);
+    setStatus("running", "Calculating distances and building report…");
+    const report = await buildReport(results, bufferKm, selectedGeom);
     renderReport(report);
     setStatus("info", `✓ Screening complete — ${CONFIG.layers.filter(l => results[l.title]?.status === "found").length} layer(s) with intersecting features.`);
     resetRunButton();
@@ -1116,135 +1188,249 @@ require([
     document.getElementById("layerResults").style.display = "block";
   }
 
-  // ── Report paragraph builder ──────────────────────────────────────────────
-  function buildReport(results, bufferKm) {
-    const bufLabel = bufferKm >= 1 ? `${bufferKm} km` : `${bufferKm * 1000} m`;
+  // ── Distance and direction helpers ────────────────────────────────────────
+  async function nearestDistanceM(featureGeom, rlbGeom) {
+    try { return await geometryEngineAsync.distance(rlbGeom, featureGeom, "meters"); }
+    catch(e) { return null; }
+  }
+
+  function bearingToCardinal(bearing) {
+    const dirs = ["north","north-east","east","south-east","south","south-west","west","north-west"];
+    return dirs[Math.round(((bearing % 360) + 360) % 360 / 45) % 8];
+  }
+
+  function directionFromRlb(rlbGeom, featureGeom) {
+    if (!rlbGeom?.extent || !featureGeom?.extent) return null;
+    const rc = { x: (rlbGeom.extent.xmin + rlbGeom.extent.xmax) / 2, y: (rlbGeom.extent.ymin + rlbGeom.extent.ymax) / 2 };
+    const fc = { x: (featureGeom.extent.xmin + featureGeom.extent.xmax) / 2, y: (featureGeom.extent.ymin + featureGeom.extent.ymax) / 2 };
+    return bearingToCardinal(Math.atan2(fc.x - rc.x, fc.y - rc.y) * 180 / Math.PI);
+  }
+
+  function formatHa(attrs) {
+    const raw = attrs["Shape__Area"] || attrs["AreaHa"] || attrs["AREA"] || attrs["MEASURE"];
+    if (!raw) return null;
+    // Shape__Area is in map units (metres²) — convert to ha; AreaHa already in ha
+    const val = attrs["AreaHa"] ? parseFloat(raw) : parseFloat(raw) / 10000;
+    return val.toFixed(2);
+  }
+
+  function designationImportance(shortName) {
+    const s = shortName.toLowerCase();
+    if (s.includes("sac") || s.includes("spa") || s.includes("ramsar") || s.includes("special area") || s.includes("special protection")) return "International";
+    if (s.includes("sssi") || s.includes("special scientific") || s.includes("nnr") || s.includes("national nature") || s.includes("national park") || s.includes("aonb") || s.includes("outstanding natural beauty")) return "National";
+    return "Local";
+  }
+
+  function importanceClass(imp) {
+    if (imp === "International") return "badge-intl";
+    if (imp === "National") return "badge-natl";
+    return "badge-local";
+  }
+
+  function citationUrl(attrs) {
+    const code = attrs["REF_CODE"] || attrs["SAC_CODE"] || attrs["ID"] || attrs["REF"];
+    if (!code) return null;
+    return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=S${code}`;
+  }
+
+  function locStr(distM, dir) {
+    if (distM === null) return "within the buffer";
+    if (distM < 50) return "within or adjoining the site";
+    return `approx. ${(distM/1000).toFixed(1)}km ${dir || ""} of the site at its nearest point`;
+  }
+
+  // ── Main report builder (async — calculates distances) ────────────────────
+  async function buildReport(results, bufferKm, rlbGeom) {
+    const bufLabel = bufferKm >= 1 ? `${bufferKm}km` : `${bufferKm * 1000}m`;
     const date = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+    let paraNum = 1;
+    const P = txt => `<p><span class="para-num">1.1.${paraNum++}</span>${txt}</p>`;
+    const ph = txt => `<span class="placeholder">[${txt}]</span>`;
 
     const found   = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "found");
-    const absent  = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "absent");
     const missing = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing" && !r.cfg.wms);
     const wms     = CONFIG.layers.map(l => results[l.title]).filter(r => r?.status === "missing" && r.cfg.wms);
 
-    let para = `A ${bufLabel} buffer was applied to the red line boundary of the application site and interrogated against national open access ecological datasets on ${date}. `;
+    let html = `<h2>Desk Study Findings</h2>`;
+    html += P(`A ${bufLabel} buffer was applied to the red line boundary (RLB) of the application site and interrogated against national open access ecological datasets on ${date}.`);
 
-    if (found.length === 0) {
-      para += `No statutory designated sites, priority habitats, bat consultation zones, priority river habitats, or notable biodiversity records were identified within the ${bufLabel} search radius.`;
-      if (missing.length) para += ` Note: the following layers could not be queried and should be checked manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`;
-      return para;
-    }
+    // ══ DESIGNATED SITES ═══════════════════════════════════════════════════
+    html += `<h2>Designated Sites</h2><h3>Statutory Designated Sites</h3>`;
 
-    // ── Statutory designations ──────────────────────────────────────────────
     const statutory = found.filter(r => r.cfg.type === "statutory");
-    if (statutory.length) {
-      para += `The following statutory nature conservation designations were recorded within the ${bufLabel} buffer: `;
-      const items = statutory.map(r => {
-        const n = r.cfg.maxList || 4;
-        if (r.cfg.nameField && r.names.length) {
-          return `${r.count} ${r.cfg.shortName} (${nameList(r.names, n)})`;
-        }
-        return `${r.count} ${r.cfg.shortName}`;
-      });
-      para += oxfordList(items) + ". ";
+
+    // Build flat deduplicated feature list with distances
+    const statRows = [];
+    const seenNames = new Set();
+    for (const r of statutory) {
+      for (const f of r.features) {
+        const name = f.attributes[r.cfg.nameField] || "Unnamed";
+        if (seenNames.has(name)) continue;
+        seenNames.add(name);
+        const distM = await nearestDistanceM(f.geometry, rlbGeom);
+        const dir   = directionFromRlb(rlbGeom, f.geometry);
+        const ha    = formatHa(f.attributes);
+        const imp   = designationImportance(r.cfg.shortName);
+        const cite  = citationUrl(f.attributes);
+        statRows.push({ name, distM, dir, ha, attrs: f.attributes, cfg: r.cfg, imp, cite });
+      }
+    }
+    statRows.sort((a, b) => (a.distM || 0) - (b.distM || 0));
+
+    if (statRows.length === 0) {
+      html += P(`No statutory designated sites for nature conservation were identified within the ${bufLabel} search radius.`);
+    } else {
+      const n = statRows.length;
+      html += P(`${n === 1 ? "One" : n} statutory designated site${n !== 1 ? "s" : ""} for nature conservation ${n !== 1 ? "were" : "was"} identified during the desk study and ${n !== 1 ? "are" : "is"} summarised in Table 1 below.`);
+      html += `<p><strong>Table 1: Summary of Statutory Designated Sites for Nature Conservation</strong></p>
+      <table><thead><tr><th>Site Name</th><th>Size, Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
+      for (const row of statRows) {
+        const sizeStr = row.ha ? `${row.ha} hectares<br>` : "";
+        const citeLink = row.cite ? ` <a class="citation-link" href="${row.cite}" target="_blank">[NE citation ↗]</a>` : "";
+        html += `<tr>
+          <td>${row.name}${citeLink}</td>
+          <td>${sizeStr}${locStr(row.distM, row.dir).charAt(0).toUpperCase() + locStr(row.distM, row.dir).slice(1)}</td>
+          <td>${ph("Insert from NE citation")}</td>
+          <td><span class="badge ${importanceClass(row.imp)}">${row.imp}</span></td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
     }
 
-    // ── Habitats ────────────────────────────────────────────────────────────
+    // Local / non-statutory
+    html += `<h3>Local and Non-Statutory Designated Sites</h3>`;
+    const lnrRows = statRows.filter(r => r.imp === "Local");
+    if (lnrRows.length === 0) {
+      html += P(`No local or non-statutory designated sites for nature conservation were identified within the ${bufLabel} search radius.`);
+    } else {
+      const n = lnrRows.length;
+      html += P(`${n === 1 ? "One" : n} local or non-statutory designated site${n !== 1 ? "s" : ""} for nature conservation ${n !== 1 ? "were" : "was"} identified and ${n !== 1 ? "are" : "is"} summarised in Table 2 below.`);
+      html += `<p><strong>Table 2: Summary of Local and Non-Statutory Designated Sites for Nature Conservation</strong></p>
+      <table><thead><tr><th>Site Name</th><th>Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
+      for (const row of lnrRows) {
+        html += `<tr>
+          <td>${row.name}</td>
+          <td>${locStr(row.distM, row.dir).charAt(0).toUpperCase() + locStr(row.distM, row.dir).slice(1)}</td>
+          <td>${ph("Insert designation reason")}</td>
+          <td><span class="badge badge-local">Local</span></td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+
+    html += P(`${ph("Insert Local Wildlife Sites (LWS) — open source data not available. Check with local LERC.")}`);
+
+    // ══ HABITATS ════════════════════════════════════════════════════════════
+    html += `<h2>Habitats</h2>`;
     const habitats = found.filter(r => r.cfg.type === "habitat");
-    if (habitats.length) {
-      para += "In terms of designated and priority habitats, ";
-      const items = habitats.map(r => {
-        const n = r.cfg.maxList || 5;
-        if (r.cfg.groupByField && r.names.length) {
-          return `${r.count} ${r.cfg.shortName} were identified, comprising ${nameList(r.names, n)}`;
+    if (habitats.length === 0) {
+      html += P(`No designated or priority habitats were identified within the ${bufLabel} search radius.`);
+    } else {
+      for (const r of habitats) {
+        const habRows = [];
+        for (const f of r.features) {
+          const name  = f.attributes[r.cfg.nameField] || "Unclassified";
+          const distM = await nearestDistanceM(f.geometry, rlbGeom);
+          const dir   = directionFromRlb(rlbGeom, f.geometry);
+          const ha    = formatHa(f.attributes);
+          habRows.push({ name, distM, dir, ha });
         }
-        if (r.cfg.nameField && r.names.length) {
-          return `${r.count} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} recorded (${nameList(r.names, n)})`;
+        habRows.sort((a, b) => (a.distM || 0) - (b.distM || 0));
+        const count = habRows.length;
+
+        if (r.cfg.groupByField) {
+          const byType = {};
+          habRows.forEach(f => {
+            if (!byType[f.name]) byType[f.name] = { count: 0, minDist: f.distM ?? Infinity, dir: f.dir };
+            byType[f.name].count++;
+            if ((f.distM ?? Infinity) < byType[f.name].minDist) { byType[f.name].minDist = f.distM; byType[f.name].dir = f.dir; }
+          });
+          const types = Object.entries(byType).sort((a,b) => a[1].minDist - b[1].minDist);
+          html += P(`${count} parcel${count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer, comprising the following habitat types:`);
+          html += `<ul>` + types.map(([type, d]) =>
+            `<li><strong>${type}</strong> — ${d.count} parcel${d.count !== 1 ? "s" : ""}, nearest ${locStr(d.minDist === Infinity ? null : d.minDist, d.dir)}</li>`
+          ).join("") + `</ul>`;
+        } else {
+          html += P(`${count} parcel${count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
+          if (count <= 15) {
+            html += `<ul>` + habRows.map(f =>
+              `<li><strong>${f.name}</strong>${f.ha ? ` (${f.ha} ha)` : ""} — ${locStr(f.distM, f.dir)}</li>`
+            ).join("") + `</ul>`;
+          }
         }
-        return `${r.count} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} recorded`;
-      });
-      para += oxfordList(items) + ". ";
+      }
     }
 
-    // ── River habitats ──────────────────────────────────────────────────────
+    // ══ WATERCOURSES ════════════════════════════════════════════════════════
     const rivers = found.filter(r => r.cfg.type === "river");
     if (rivers.length) {
-      para += "With regard to watercourses and river habitats, the buffer intersects ";
-      const items = rivers.map(r =>
-        `${r.count} feature${r.count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer`
-      );
-      para += oxfordList(items) + ". ";
+      html += `<h2>Watercourses and River Habitats</h2>`;
+      for (const r of rivers) {
+        const count = r.features.length;
+        html += P(`${count} feature${count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer ${count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
+      }
     }
 
-    // ── Bat consultation zones ──────────────────────────────────────────────
+    // ══ BAT CONSULTATION ZONES ══════════════════════════════════════════════
     const bats = found.filter(r => r.cfg.type === "bat");
     if (bats.length) {
+      html += `<h2>Bat Consultation Zones</h2>`;
       const zoneNames = bats.map(r => r.cfg.shortName.replace("Bat Consultation Zone — ", ""));
-      para += `The site falls within ${bats.length > 1 ? `${bats.length} Bat Consultation Zones` : "a Bat Consultation Zone"} (${oxfordList(zoneNames)}), indicating that bat survey requirements should be considered as part of any ecological assessment. `;
+      html += P(`The site falls within ${bats.length > 1 ? `${bats.length} Bat Consultation Zones` : "a Bat Consultation Zone"} (${zoneNames.join("; ")}), indicating that bat survey requirements should be considered as part of any ecological assessment.`);
     }
 
-    // ── Biodiversity records ────────────────────────────────────────────────
+    // ══ BIODIVERSITY RECORDS ════════════════════════════════════════════════
     const records = found.filter(r => r.cfg.type === "records");
-    records.forEach(r => {
-      const n = r.cfg.maxList || 5;
-      para += `A total of ${r.count} ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} retrieved within the buffer`;
-      if (r.cfg.nameField && r.names.length) {
-        para += `, including records of ${nameList(r.names, n)}`;
+    if (records.length) {
+      html += `<h2>Biodiversity Records</h2>`;
+      for (const r of records) {
+        const count = r.features.length;
+        const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
+        html += P(`A total of ${count} ${r.cfg.shortName} ${count !== 1 ? "were" : "was"} retrieved within the ${bufLabel} buffer.`);
+        if (uniqueNames.length) {
+          const listed = uniqueNames.slice(0, r.cfg.maxList || 5);
+          const rem = uniqueNames.length - listed.length;
+          html += `<ul>` + listed.map(n => `<li>${n}</li>`).join("") + (rem > 0 ? `<li><em>…and ${rem} further species</em></li>` : "") + `</ul>`;
+        }
       }
-      para += ". ";
-    });
-
-    // ── Absent designations (only list if 5 or fewer to keep text clean) ───
-    const absentStatutory = absent.filter(r => r.cfg.type === "statutory").map(r => r.cfg.shortName);
-    if (absentStatutory.length && absentStatutory.length <= 5) {
-      para += `No ${oxfordList(absentStatutory)} ${absentStatutory.length === 1 ? "was" : "were"} recorded within the search area. `;
     }
 
-    // ── Missing layers warning ──────────────────────────────────────────────
-    if (missing.length) {
-      para += `Note: the following layers could not be queried and should be verified manually: ${missing.map(r => r.cfg.shortName).join(", ")}. `;
+    // ══ PLACEHOLDER SECTIONS ════════════════════════════════════════════════
+    html += `<h2>Local BAP</h2>`;
+    html += P(`${ph("Insert relevant Local Biodiversity Action Plan habitats and species.")}`);
+
+    html += `<h2>Planning Policy</h2>`;
+    html += P(`${ph("Insert relevant local planning policies identified from the Local Development Framework and Local Plan.")}`);
+
+    // ══ DATA LIMITATIONS ════════════════════════════════════════════════════
+    if (wms.length || missing.length) {
+      html += `<h2>Data Limitations</h2>`;
+      if (wms.length) html += P(`The following Welsh designation layers are served as WMS and could not be queried automatically — check visually in the map: ${wms.map(r => r.cfg.shortName).join(", ")}.`);
+      if (missing.length) html += P(`The following layers could not be queried and should be verified manually: ${missing.map(r => r.cfg.shortName).join(", ")}.`);
     }
 
-    // ── WMS layers note ─────────────────────────────────────────────────────
-    if (wms.length) {
-      para += `The following Welsh designation layers are served as WMS and could not be queried automatically — they should be checked visually in the map: ${wms.map(r => r.cfg.shortName).join(", ")}.`;
-    }
-
-    return para.trim();
-  }
-
-  function nameList(names, max) {
-    if (!names || !names.length) return "unnamed features";
-    const capped = names.slice(0, max);
-    const rem = names.length - max;
-    let s = capped.map(n => `'${n}'`).join(", ");
-    if (rem > 0) s += ` and ${rem} other${rem > 1 ? "s" : ""}`;
-    return s;
-  }
-
-  function oxfordList(items) {
-    if (!items.length) return "";
-    if (items.length === 1) return items[0];
-    if (items.length === 2) return `${items[0]} and ${items[1]}`;
-    return items.slice(0, -1).join(", ") + ", and " + items[items.length - 1];
+    return html;
   }
 
   // ── Render report ─────────────────────────────────────────────────────────
-  function renderReport(text) {
-    document.getElementById("reportBody").textContent = text;
+  function renderReport(html) {
+    document.getElementById("reportBody").innerHTML = html;
     document.getElementById("reportBox").classList.add("visible");
     document.getElementById("reportBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   // ── Copy ──────────────────────────────────────────────────────────────────
   window.copyReport = function() {
-    const text = document.getElementById("reportBody").textContent;
+    const el = document.getElementById("reportBody");
+    // Copy as plain text — strip HTML tags
+    const text = el.innerText || el.textContent;
     navigator.clipboard.writeText(text).catch(() => {
-      const el = document.createElement("textarea");
-      el.value = text;
-      document.body.appendChild(el);
-      el.select();
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
       document.execCommand("copy");
-      document.body.removeChild(el);
+      document.body.removeChild(ta);
     });
     const btn = document.getElementById("btnCopy");
     btn.textContent = "✓ Copied";
