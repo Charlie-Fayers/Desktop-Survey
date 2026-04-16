@@ -747,16 +747,10 @@ require([
     popup: { autoOpenEnabled: false },  // suppress all popups
   });
 
-  // Once the map loads, make all group layers and their children visible
-  // so they can be queried even if turned off by default in the web map
+  // Once the map loads, build the layer panel
+  // Note: we do NOT force layer visibility — the map's default state is preserved.
+  // Layers are queried via their REST endpoints regardless of visibility.
   view.when(() => {
-    function enableLayer(layer) {
-      layer.visible = true;
-      if (layer.layers) layer.layers.forEach(enableLayer);
-    }
-    webMap.layers.forEach(enableLayer);
-
-    // Build layer panel
     buildLayerPanel();
   });
 
