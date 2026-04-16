@@ -163,6 +163,54 @@
     .badge-natl-sm  { background: #e8f0fb; color: #1a3a6b; }
     .badge-local-sm { background: #fef9e7; color: #7a5200; }
     .badge-rec-sm   { background: #f5f0fb; color: #4a2080; }
+
+    /* ── Buffer group ────────────────────────────────────────────── */
+    .buf-group { margin-bottom: 5px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+    .buf-group-header {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px; cursor: pointer; user-select: none;
+      background: var(--bg);
+    }
+    .buf-group-header:hover { background: var(--green-pale); }
+    .buf-chevron { font-size: 9px; color: var(--ink-faint); transition: transform .15s; flex-shrink: 0; }
+    .buf-chevron.open { transform: rotate(90deg); }
+    .buf-badge {
+      font-size: 10px; padding: 1px 7px; border-radius: 3px;
+      font-weight: bold; flex: 1;
+    }
+    .buf-input {
+      width: 46px; padding: 2px 5px; border: 1px solid var(--line);
+      border-radius: 3px; font-size: 12px; font-family: 'Georgia', serif;
+      color: var(--ink); background: var(--surface); text-align: right;
+    }
+    .buf-input:focus { outline: none; border-color: var(--green-mid); }
+    .buf-km { font-size: 11px; color: var(--ink-faint); flex-shrink: 0; }
+
+    /* layer chips container */
+    .buf-layers {
+      display: none; padding: 4px 6px 6px;
+      background: var(--surface);
+      min-height: 28px;
+      border-top: 1px solid var(--line);
+    }
+    .buf-layers.open { display: block; }
+    .buf-layers.drag-over { background: var(--green-pale); }
+
+    /* individual draggable chip */
+    .layer-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 2px 7px 2px 5px;
+      margin: 2px 2px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      font-size: 10px; color: var(--ink-mid);
+      background: var(--bg);
+      cursor: grab; user-select: none;
+      transition: background .1s, border-color .1s;
+    }
+    .layer-chip:hover { border-color: var(--green-mid); color: var(--green-dark); background: var(--green-pale); }
+    .layer-chip.dragging { opacity: .4; cursor: grabbing; }
+    .layer-chip .chip-drag { font-size: 9px; color: var(--ink-faint); }
     .preset-row { display: flex; gap: 5px; flex-wrap: wrap; }
     .preset-btn {
       padding: 4px 10px;
@@ -608,30 +656,9 @@
   <div class="panel">
     <div class="panel-inner">
 
-      <!-- Buffer distances by category -->
+      <!-- Buffer distances by category — expandable with draggable layers -->
       <div class="section-label">Search distances</div>
-      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px;">
-        <div class="buffer-row">
-          <span class="cat-badge badge-intl-sm">International</span>
-          <input type="number" id="bufIntl" value="4" min="0.1" max="20" step="0.5"/>
-          <span>km</span>
-        </div>
-        <div class="buffer-row">
-          <span class="cat-badge badge-natl-sm">National</span>
-          <input type="number" id="bufNatl" value="2" min="0.1" max="20" step="0.5"/>
-          <span>km</span>
-        </div>
-        <div class="buffer-row">
-          <span class="cat-badge badge-local-sm">Local</span>
-          <input type="number" id="bufLocal" value="2" min="0.1" max="20" step="0.5"/>
-          <span>km</span>
-        </div>
-        <div class="buffer-row">
-          <span class="cat-badge badge-rec-sm">Records</span>
-          <input type="number" id="bufRec" value="1" min="0.1" max="20" step="0.5"/>
-          <span>km</span>
-        </div>
-      </div>
+      <div id="bufferGroups"></div>
 
       <!-- Steps -->
       <div class="section-label">Steps</div>
@@ -925,6 +952,7 @@ require([
   // Layers are queried via their REST endpoints regardless of visibility.
   view.when(() => {
     buildLayerPanel();
+    buildBufferGroups();
   });
 
   // ── Layer panel ───────────────────────────────────────────────────────────
@@ -1048,21 +1076,20 @@ require([
   let selectedGeom  = null;
   let bufferGraphic = null;
 
-  // ── Buffer preset buttons ─────────────────────────────────────────────────
-  // ── Buffer helpers ────────────────────────────────────────────────────────
-  function getBuffers() {
-    return {
-      international: parseFloat(document.getElementById("bufIntl").value)  || 4,
-      national:      parseFloat(document.getElementById("bufNatl").value)  || 2,
-      local:         parseFloat(document.getElementById("bufLocal").value) || 2,
-      records:       parseFloat(document.getElementById("bufRec").value)   || 1,
-    };
-  }
+  // ── Buffer group state ────────────────────────────────────────────────────
+  // layerAssignments maps cfg.title → category key
+  const layerAssignments = {};
 
-  // Map layer type + importance to buffer category
-  function bufferCategoryForLayer(cfg) {
+  const BUFFER_GROUPS = [
+    { key: "international", label: "International",  badgeClass: "badge-intl-sm",  inputId: "bufIntl",  defaultKm: 4 },
+    { key: "national",      label: "National",       badgeClass: "badge-natl-sm",  inputId: "bufNatl",  defaultKm: 2 },
+    { key: "local",         label: "Local",          badgeClass: "badge-local-sm", inputId: "bufLocal", defaultKm: 2 },
+    { key: "records",       label: "Records",        badgeClass: "badge-rec-sm",   inputId: "bufRec",   defaultKm: 1 },
+  ];
+
+  function defaultCategory(cfg) {
     if (cfg.type === "records") return "records";
-    if (cfg.type === "bat") return "national"; // bats use RLB directly anyway
+    if (cfg.type === "bat") return "national";
     if (cfg.type === "river" || cfg.type === "habitat") return "national";
     if (cfg.type === "statutory") {
       const imp = designationImportance(cfg.shortName);
@@ -1071,6 +1098,101 @@ require([
       return "national";
     }
     return "national";
+  }
+
+  function buildBufferGroups() {
+    // Initialise assignments from defaults
+    CONFIG.layers.forEach(cfg => {
+      if (!cfg.wms) layerAssignments[cfg.title] = defaultCategory(cfg);
+    });
+
+    const container = document.getElementById("bufferGroups");
+    container.innerHTML = "";
+
+    BUFFER_GROUPS.forEach(grp => {
+      const groupEl = document.createElement("div");
+      groupEl.className = "buf-group";
+      groupEl.dataset.key = grp.key;
+
+      // Header row
+      const header = document.createElement("div");
+      header.className = "buf-group-header";
+      header.innerHTML = `
+        <span class="buf-chevron">▶</span>
+        <span class="buf-badge ${grp.badgeClass}">${grp.label}</span>
+        <input class="buf-input" id="${grp.inputId}" type="number"
+          value="${grp.defaultKm}" min="0.1" max="20" step="0.5"/>
+        <span class="buf-km">km</span>`;
+
+      const chevron = header.querySelector(".buf-chevron");
+      const layersDiv = document.createElement("div");
+      layersDiv.className = "buf-layers";
+      layersDiv.dataset.key = grp.key;
+
+      // Toggle expand/collapse
+      header.addEventListener("click", e => {
+        if (e.target.classList.contains("buf-input")) return;
+        layersDiv.classList.toggle("open");
+        chevron.classList.toggle("open");
+      });
+
+      // Drag-over highlighting
+      layersDiv.addEventListener("dragover", e => {
+        e.preventDefault();
+        layersDiv.classList.add("drag-over");
+      });
+      layersDiv.addEventListener("dragleave", () => layersDiv.classList.remove("drag-over"));
+      layersDiv.addEventListener("drop", e => {
+        e.preventDefault();
+        layersDiv.classList.remove("drag-over");
+        const title = e.dataTransfer.getData("text/plain");
+        if (title && layerAssignments[title] !== grp.key) {
+          layerAssignments[title] = grp.key;
+          refreshChips();
+        }
+      });
+
+      groupEl.appendChild(header);
+      groupEl.appendChild(layersDiv);
+      container.appendChild(groupEl);
+    });
+
+    refreshChips();
+  }
+
+  function refreshChips() {
+    // Clear all chip containers
+    document.querySelectorAll(".buf-layers").forEach(d => d.innerHTML = "");
+
+    CONFIG.layers.forEach(cfg => {
+      if (cfg.wms) return; // WMS layers not queryable — skip
+      const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
+      const container = document.querySelector(`.buf-layers[data-key="${cat}"]`);
+      if (!container) return;
+
+      const chip = document.createElement("div");
+      chip.className = "layer-chip";
+      chip.draggable = true;
+      chip.innerHTML = `<span class="chip-drag">⠿</span>${cfg.title.replace(/ \(England\)| \(Wales\)/g,"").trim()}`;
+      chip.title = cfg.title;
+
+      chip.addEventListener("dragstart", e => {
+        e.dataTransfer.setData("text/plain", cfg.title);
+        chip.classList.add("dragging");
+      });
+      chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+
+      container.appendChild(chip);
+    });
+  }
+
+  // ── Buffer helpers ────────────────────────────────────────────────────────
+  function getBuffers() {
+    const vals = {};
+    BUFFER_GROUPS.forEach(g => {
+      vals[g.key] = parseFloat(document.getElementById(g.inputId)?.value) || g.defaultKm;
+    });
+    return vals;
   }
 
   // ── Selection ─────────────────────────────────────────────────────────────
@@ -1174,7 +1296,7 @@ require([
 
     const promises = CONFIG.layers.map(async cfg => {
       // Pick the correct buffer geometry for this layer's category
-      const cat = bufferCategoryForLayer(cfg);
+      const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
       const bufGeom = bufGeoms[cat];
       const layer = findLayer(webMap.layers, cfg.title);
 
