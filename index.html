@@ -1117,42 +1117,48 @@ require([
           if (/recommended|common_name|taxon_group|authority|qualifier|version|sort|note|for further/i.test(h)) return;
 
           if (/wca.*sch.*1|wca.*schedule.*1|sch.*1.*wca/i.test(hl))
-            desigCols.push({ h, label: () => "WCA 1981 Schedule 1" });
+            desigCols.push({ h, prefix: "WCA 1981 Sch.1", label: (v) => cleanLegislationLabel("WCA 1981 Sch.1", v) });
           else if (/wca.*sch.*5|wca.*schedule.*5|sch.*5.*wca/i.test(hl))
-            desigCols.push({ h, label: () => "WCA 1981 Schedule 5" });
+            desigCols.push({ h, prefix: "WCA 1981 Sch.5", label: (v) => cleanLegislationLabel("WCA 1981 Sch.5", v) });
           else if (/wca.*sch.*8|wca.*schedule.*8|sch.*8.*wca/i.test(hl))
-            desigCols.push({ h, label: () => "WCA 1981 Schedule 8" });
+            desigCols.push({ h, prefix: "WCA 1981 Sch.8", label: (v) => cleanLegislationLabel("WCA 1981 Sch.8", v) });
           else if (/wildlife.*countryside|wca/i.test(hl) && !/birds/i.test(hl))
-            desigCols.push({ h, label: (v) => `WCA 1981 ${v}` });
+            desigCols.push({ h, prefix: "WCA 1981", label: (v) => cleanLegislationLabel("WCA 1981", v) });
           else if (/habitats.*species.*reg.*sch.*2|hab.*reg.*sch.*2/i.test(hl))
-            desigCols.push({ h, label: () => "Hab. Regs. Schedule 2" });
+            desigCols.push({ h, prefix: "Hab. Regs. Sch.2", label: (v) => cleanLegislationLabel("Hab. Regs. Sch.2", v) });
           else if (/habitats.*species.*reg.*sch.*4|hab.*reg.*sch.*4/i.test(hl))
-            desigCols.push({ h, label: () => "Hab. Regs. Schedule 4" });
+            desigCols.push({ h, prefix: "Hab. Regs. Sch.4", label: (v) => cleanLegislationLabel("Hab. Regs. Sch.4", v) });
           else if (/habitats.*species.*reg.*sch.*5|hab.*reg.*sch.*5/i.test(hl))
-            desigCols.push({ h, label: () => "Hab. Regs. Schedule 5" });
+            desigCols.push({ h, prefix: "Hab. Regs. Sch.5", label: (v) => cleanLegislationLabel("Hab. Regs. Sch.5", v) });
           else if (/habitats.*species.*reg|hab.*reg|conservation.*habitat.*reg/i.test(hl))
-            desigCols.push({ h, label: (v) => `Hab. Regs. ${v}` });
-          else if (/habitats directive.*ann.*2|hab.*dir.*ann.*2/i.test(hl))
-            desigCols.push({ h, label: () => "Hab. Dir. Annex II" });
-          else if (/habitats directive.*ann.*4|hab.*dir.*ann.*4/i.test(hl))
-            desigCols.push({ h, label: () => "Hab. Dir. Annex IV" });
-          else if (/habitats directive.*ann.*5|hab.*dir.*ann.*5/i.test(hl))
-            desigCols.push({ h, label: () => "Hab. Dir. Annex V" });
-          else if (/habitats directive/i.test(hl))
-            desigCols.push({ h, label: (v) => `Hab. Dir. ${v}` });
+            desigCols.push({ h, prefix: "Hab. Regs.", label: (v) => cleanLegislationLabel("Hab. Regs.", v) });
+          // Habitats Directive excluded deliberately
           else if (/nerc.*s41|s41.*england|principal.*england/i.test(hl))
-            desigCols.push({ h, label: () => "NERC S41" });
+            desigCols.push({ h, prefix: "NERC S.41", label: () => "NERC S.41" });
           else if (/nerc.*s42|s42.*wales|principal.*wales/i.test(hl))
-            desigCols.push({ h, label: () => "NERC S42" });
+            desigCols.push({ h, prefix: "NERC S.42", label: () => "NERC S.42" });
           else if (/badger/i.test(hl))
-            desigCols.push({ h, label: () => "Badgers Act 1992" });
+            desigCols.push({ h, prefix: "Badgers Act 1992", label: () => "Badgers Act 1992" });
           else if (/birds.*conservation.*concern.*5|bocc.*5|bocc5/i.test(hl) ||
                    /red data categor.*birds|fd.*red data.*birds/i.test(hl))
-            desigCols.push({ h, label: (v) => `BoCC5 ${v.charAt(0).toUpperCase()+v.slice(1).toLowerCase()} List`, filter: (v) => /red|amber/i.test(v) });
+            desigCols.push({ h, prefix: "BoCC5", label: (v) => `BoCC5 ${v.charAt(0).toUpperCase()+v.slice(1).toLowerCase()} List`, filter: (v) => /red|amber/i.test(v) });
           else if (/biodiversity.*list.*england|hb.*biodiversity/i.test(hl))
-            desigCols.push({ h, label: () => "Biodiversity List (England)", filter: (v) => !!v && v !== "0" && v !== "N" });
-          // Exclude Birds Directive deliberately
+            desigCols.push({ h, prefix: "NERC S.41", label: () => "NERC S.41", filter: (v) => !!v && v !== "0" && v !== "N" });
+          // Birds Directive excluded deliberately
         });
+
+        // Consolidates "WCA 1981 Sch.5 WACA-Sch5_sect9.4b, WACA-Sch5_sect9.4c" into
+        // "WCA 1981 Sch.5 Sect.9.4b, 9.4c"
+        function cleanLegislationLabel(prefix, rawVal) {
+          if (!rawVal || rawVal === "Y" || rawVal === "1") return prefix;
+          // Extract section references — numbers/letters after "sect" or "section"
+          const sects = rawVal.split(/[,;]+/).map(s => {
+            const m = s.match(/sect[\._]?([\d\.]+[a-z]*)/i);
+            return m ? `Sect.${m[1]}` : s.trim();
+          }).filter(Boolean);
+          const unique = [...new Set(sects)].sort();
+          return unique.length ? `${prefix} ${unique.join(", ")}` : prefix;
+        }
 
         console.log("JNCC desig cols found:", desigCols.map(d => d.h).join(" | "));
         console.log("JNCC latinCol:", latinCol, "commonCol:", commonCol, "groupCol:", groupCol);
@@ -1167,11 +1173,30 @@ require([
           if (!latinName || latinName === "recommended_taxon_name") return;
 
           const designations = new Set();
-          desigCols.forEach(({ h, label, filter }) => {
+          // Group by prefix first to consolidate e.g. multiple WCA Sch.5 sub-entries
+          const byPrefix = {};
+          desigCols.forEach(({ h, prefix, label, filter }) => {
             const val = String(row[h] || "").trim();
-            if (!val || val === "0" || val === "N" || val === "") return;
+            if (!val || val === "0" || val === "N") return;
             if (filter && !filter(val)) return;
-            designations.add(label(val));
+            const resolved = label(val);
+            const key = prefix || resolved;
+            if (!byPrefix[key]) byPrefix[key] = [];
+            byPrefix[key].push(resolved);
+          });
+          // For each prefix group, merge sect refs if multiple
+          Object.entries(byPrefix).forEach(([prefix, labels]) => {
+            if (labels.length === 1) {
+              designations.add(labels[0]);
+            } else {
+              // Extract all sect refs and combine under prefix
+              const allSects = labels.flatMap(l => {
+                const parts = l.replace(prefix, "").trim().split(/,\s*/);
+                return parts.filter(Boolean);
+              });
+              const unique = [...new Set(allSects)].sort();
+              designations.add(unique.length ? `${prefix} ${unique.join(", ")}` : prefix);
+            }
           });
 
           if (designations.size === 0) return;
