@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Automated Desk Study</title>
 
+  <!-- SheetJS — must load BEFORE ArcGIS/Dojo to avoid AMD conflict -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
   <!-- ArcGIS Maps SDK 4.29 -->
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
   <script src="https://js.arcgis.com/4.29/"></script>
@@ -950,9 +953,93 @@ require([
   // Once the map loads, build the layer panel and load Word export library
   // Note: we do NOT force layer visibility — the map's default state is preserved.
   // Layers are queried via their REST endpoints regardless of visibility.
+  // ── JNCC protected species lookup ────────────────────────────────────────
+  // Loaded once on startup; maps lowercase name → {designations, category, taxonGroup}
+  let jnccLookup = null;   // null = not loaded yet; {} = loaded (may be empty on error)
+  let jnccLoading = false;
+
+  const JNCC_URL = "https://data.jncc.gov.uk/data/478f7160-967b-4366-acdf-8941fd33850b/Taxon-designations-20231206.xlsx";
+
+  // Reporting categories we want to flag
+  const PROTECTED_CATEGORIES = [
+    "Wildlife and Countryside Act 1981",
+    "NERC Act S41 (England)",
+    "NERC Act S42 (Wales)",
+    "Habitats and Species Regulations 2017",
+    "Protection of Badgers Act 1992",
+    "Birds Directive",
+    "Habitats Directive",
+  ];
+  // Designation values to exclude from Red List entries (not actually threatened)
+  const REDLIST_EXCLUDE = ["lc","lc_","not evaluated","ne","not assessed","na","dd"];
+
+  async function loadJncc() {
+    if (jnccLookup !== null || jnccLoading) return;
+    jnccLoading = true;
+    try {
+      const resp = await fetch(JNCC_URL);
+      const buf  = await resp.arrayBuffer();
+      const wb   = XLSX.read(buf, { type: "array" });
+
+      // Find the Master List sheet
+      const sheetName = wb.SheetNames.find(n => /master/i.test(n)) || wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+
+      const lookup = {};
+
+      rows.forEach(row => {
+        const repCat   = String(row["Reporting category"] || row["reporting category"] || "").trim();
+        const desig    = String(row["Designation"] || row["designation"] || "").trim().toLowerCase();
+        const taxName  = String(row["Recommended taxon name"] || "").trim().toLowerCase();
+        const comName  = String(row["Common name"] || "").trim().toLowerCase();
+        const category = String(row["Category"] || row["category"] || "").trim();
+        const taxGroup = String(row["Taxon group"] || row["taxon group"] || "").trim();
+
+        // Check if this row matches a protected category
+        const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
+
+        // Check if this is a Red List entry that isn't LC/NE/NA
+        const isRedList = /red list/i.test(repCat) && !REDLIST_EXCLUDE.some(x => desig.startsWith(x));
+
+        if (!isProtected && !isRedList) return;
+
+        const designLabel = isRedList
+          ? `Red List (${row["Designation"] || ""})`.trim()
+          : repCat.replace("Habitats and Species Regulations 2017", "Hab. Regs.")
+                  .replace("Wildlife and Countryside Act 1981", "WCA")
+                  .replace("Protection of Badgers Act 1992", "Badgers Act")
+                  .replace("NERC Act S41 (England)", "NERC S41")
+                  .replace("NERC Act S42 (Wales)", "NERC S42")
+                  .replace("Habitats Directive", "Hab. Dir.")
+                  .replace("Birds Directive", "Birds Dir.");
+
+        // Add to lookup under both scientific and common name
+        [taxName, comName].filter(Boolean).forEach(key => {
+          if (!lookup[key]) lookup[key] = { category, taxonGroup: taxGroup, designations: new Set() };
+          lookup[key].designations.add(designLabel);
+        });
+      });
+
+      // Convert Sets to sorted arrays
+      Object.values(lookup).forEach(v => { v.designations = [...v.designations].sort(); });
+      jnccLookup = lookup;
+      console.log(`JNCC lookup loaded: ${Object.keys(lookup).length} protected taxa`);
+    } catch(e) {
+      console.warn("JNCC lookup failed to load:", e.message);
+      jnccLookup = {};
+    }
+    jnccLoading = false;
+  }
+
+  function lookupSpecies(name) {
+    if (!jnccLookup) return null;
+    return jnccLookup[name.toLowerCase().trim()] || null;
+  }
+
   view.when(() => {
     buildLayerPanel();
     buildBufferGroups();
+    loadJncc(); // start loading JNCC data in background
   });
 
   // ── Layer panel ───────────────────────────────────────────────────────────
@@ -1820,15 +1907,57 @@ require([
     const records = found.filter(r => r.cfg.type === "records");
     if (records.length) {
       html += `<h2>Biodiversity Records</h2>`;
-      for (const r of records) {
+
+      // Merge all species names across record sources
+      const allNames = [];
+      records.forEach(r => {
         const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
         const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
         html += P(`A total of ${countLabel} ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} retrieved within the ${rBuf(r)} buffer.`);
-        if (uniqueNames.length) {
-          const listed = uniqueNames.slice(0, r.cfg.maxList || 5);
-          const rem = uniqueNames.length - listed.length;
-          html += `<ul>` + listed.map(n => `<li>${n}</li>`).join("") + (rem > 0 ? `<li><em>…and ${rem} further species</em></li>` : "") + `</ul>`;
+        uniqueNames.forEach(n => { if (!allNames.includes(n)) allNames.push(n); });
+      });
+
+      // Cross-reference against JNCC if lookup is available
+      if (jnccLookup && Object.keys(jnccLookup).length > 0) {
+        // Group protected species by taxon category
+        const byCategory = {};
+        allNames.forEach(name => {
+          const match = lookupSpecies(name);
+          if (!match) return;
+          const cat = match.category || match.taxonGroup || "Other";
+          if (!byCategory[cat]) byCategory[cat] = [];
+          byCategory[cat].push({ name, designations: match.designations });
+        });
+
+        const protectedCount = Object.values(byCategory).reduce((s,v) => s+v.length, 0);
+        const totalNames = allNames.length;
+
+        if (protectedCount > 0) {
+          html += P(`Of the ${totalNames} species recorded, ${protectedCount} ${protectedCount !== 1 ? "are" : "is"} listed under UK or international conservation legislation or Red Lists. These are summarised below by taxonomic group.`);
+          Object.entries(byCategory).sort((a,b) => a[0].localeCompare(b[0])).forEach(([cat, spp]) => {
+            html += `<p><strong>${cat.charAt(0).toUpperCase() + cat.slice(1)}</strong></p>`;
+            html += `<ul>` + spp.map(s =>
+              `<li><strong>${s.name}</strong> — ${s.designations.join("; ")}</li>`
+            ).join("") + `</ul>`;
+          });
+        } else {
+          html += P(`None of the ${totalNames} species recorded were identified on the JNCC Conservation Designations list under the selected legislation. This does not preclude the presence of protected species within the wider site area.`);
         }
+        html += `<p style="font-size:10px;color:#666;font-style:italic">Species protection data: JNCC Conservation Designations for UK Taxa (December 2023), OGL v3.</p>`;
+      } else if (jnccLookup === null) {
+        html += P(`${ph("JNCC species protection lookup is still loading — re-run the desk study once the page has fully loaded to include protected species cross-referencing.")}`);
+      } else {
+        // Lookup failed — fall back to listing all species
+        html += P(`Protected species cross-referencing was unavailable. All recorded species are listed below.`);
+        records.forEach(r => {
+          const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
+          if (uniqueNames.length) {
+            const listed = uniqueNames.slice(0, r.cfg.maxList || 10);
+            const rem = uniqueNames.length - listed.length;
+            html += `<ul>` + listed.map(n => `<li>${n}</li>`).join("") +
+              (rem > 0 ? `<li><em>…and ${rem} further species</em></li>` : "") + `</ul>`;
+          }
+        });
       }
     }
 
