@@ -798,7 +798,7 @@ require([
       // ── England: habitats ─────────────────────────────────────────────────
       { title: "Ancient Woodland (England)",
         shortName: "ancient woodland",
-        nameField: "NAME", type: "habitat", maxList: 4 },
+        nameField: "NAME", statusField: "THEMNAME", type: "habitat", maxList: 4 },
 
       { title: "Priority Habitats Inventory (England)",
         shortName: "Priority Habitat Inventory parcels",
@@ -829,7 +829,7 @@ require([
 
       { title: "EA Statutory Rivers",
         shortName: "EA Statutory Rivers",
-        nameField: null, type: "river" },
+        nameField: null, type: "river", lengthField: "LENGTH_KM" },
 
       // ── Bat consultation zones (individual layers within group) ───────────
       { title: "Wiltshire",
@@ -1191,6 +1191,7 @@ require([
           try { const cr = await queryREST.executeQueryJSON(url, countQ); trueCount = cr.count || 0; } catch(e) {}
 
           // Step 2: get up to 2000 features for name values (no geometry)
+          // Fetch with duplicates so we can count per-type accurately
           const nameQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", outFields: [cfg.nameField], returnGeometry: false, num: 2000 });
           const nameFs = await queryREST.executeQueryJSON(url, nameQ);
           const rawNames = (nameFs.features || []).map(f => f.attributes[cfg.nameField]).filter(Boolean);
@@ -1200,7 +1201,8 @@ require([
             status: trueCount > 0 ? "found" : "absent",
             count: trueCount,
             names: unique,
-            features: [], // no geometry needed for groupByField layers
+            _rawNames: rawNames, // preserve with duplicates for per-type counting
+            features: [],
             cfg,
           };
 
@@ -1491,11 +1493,13 @@ require([
       <table><thead><tr><th>Site Name</th><th>Size, Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
       for (const row of statRows) {
         const sizeStr = row.ha ? `${row.ha} hectares<br>` : "";
-        const citeLink = row.cite ? ` <a class="citation-link" href="${row.cite}" target="_blank">[NE citation ↗]</a>` : "";
+        const reasonCell = row.cite
+          ? `<a class="citation-link" href="${row.cite}" target="_blank">[Insert from NE citation ↗]</a>`
+          : ph("Insert from NE citation");
         html += `<tr>
-          <td>${row.name}${citeLink}</td>
+          <td>${row.name}</td>
           <td>${sizeStr}${locStr(row.distM, row.dir).charAt(0).toUpperCase() + locStr(row.distM, row.dir).slice(1)}</td>
-          <td>${ph("Insert from NE citation")}</td>
+          <td>${reasonCell}</td>
           <td><span class="badge ${importanceClass(row.imp)}">${row.imp}</span></td>
         </tr>`;
       }
@@ -1535,26 +1539,37 @@ require([
         const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
 
         if (r.cfg.groupByField) {
-          // names already deduplicated unique habitat types, no geometry needed
+          // PHI — count parcels per unique habitat type
+          const byType = {};
+          (r.names || []).forEach(n => { byType[n] = (byType[n] || 0) + 1; });
+          // names array may have duplicates — recount from features if available
+          // Use the raw name list (may have dupes) for accurate per-type counts
+          const rawList = r._rawNames || r.names;
+          const typeCounts = {};
+          rawList.forEach(n => { typeCounts[n] = (typeCounts[n] || 0) + 1; });
+          const types = Object.entries(typeCounts).sort((a,b) => b[1] - a[1]);
           html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer, comprising the following habitat types:`);
-          html += `<ul>` + r.names.map(type =>
-            `<li><strong>${type}</strong></li>`
+          html += `<ul>` + types.map(([type, count]) =>
+            `<li><strong>${type}</strong> — ${count} parcel${count !== 1 ? "s" : ""}</li>`
           ).join("") + `</ul>`;
         } else {
           const habRows = [];
           for (const f of r.features) {
-            const name  = f.attributes[r.cfg.nameField] || "Unclassified";
-            const distM = await nearestDistanceM(f.geometry, rlbGeom);
-            const dir   = directionFromRlb(rlbGeom, f.geometry);
-            const ha    = formatHa(f.attributes);
-            habRows.push({ name, distM, dir, ha });
+            const name   = f.attributes[r.cfg.nameField] || "Unclassified";
+            const status = r.cfg.statusField ? (f.attributes[r.cfg.statusField] || "") : null;
+            const distM  = await nearestDistanceM(f.geometry, rlbGeom);
+            const dir    = directionFromRlb(rlbGeom, f.geometry);
+            const ha     = formatHa(f.attributes);
+            habRows.push({ name, status, distM, dir, ha });
           }
           habRows.sort((a, b) => (a.distM || 0) - (b.distM || 0));
           html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
           if (habRows.length <= 15) {
-            html += `<ul>` + habRows.map(f =>
-              `<li><strong>${f.name}</strong>${f.ha ? ` (${f.ha} ha)` : ""} — ${locStr(f.distM, f.dir)}</li>`
-            ).join("") + `</ul>`;
+            html += `<ul>` + habRows.map(f => {
+              const statusStr = f.status ? ` (${f.status})` : "";
+              const haStr = f.ha ? ` — ${f.ha} ha` : "";
+              return `<li><strong>${f.name}</strong>${statusStr}${haStr} — ${locStr(f.distM, f.dir)}</li>`;
+            }).join("") + `</ul>`;
           }
         }
       }
@@ -1566,7 +1581,20 @@ require([
       html += `<h2>Watercourses and River Habitats</h2>`;
       for (const r of rivers) {
         const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
-        html += P(`${countLabel} feature${r.count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
+        if (r.cfg.lengthField && r.features.length) {
+          // Sum the length field across all returned features
+          const totalKm = r.features.reduce((sum, f) => {
+            const val = parseFloat(f.attributes[r.cfg.lengthField]);
+            return sum + (isNaN(val) ? 0 : val);
+          }, 0);
+          const lengthStr = totalKm >= 1
+            ? `${totalKm.toFixed(2)} km`
+            : `${(totalKm * 1000).toFixed(0)} m`;
+          const note = r.count >= 2000 ? ` (based on ${countLabel} features retrieved; true total may be higher)` : "";
+          html += P(`The ${r.cfg.shortName} layer intersects the buffer, with a total watercourse length of approximately ${lengthStr} within the ${bufLabel} search area${note}.`);
+        } else {
+          html += P(`${countLabel} feature${r.count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
+        }
       }
     }
 
