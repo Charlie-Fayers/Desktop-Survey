@@ -730,10 +730,11 @@ require([
     setStatus("running", "Building buffer and querying layers…");
     showProgress(5, "Building buffer…");
 
+    const bufferMetres = bufferKm * 1000;
+
     // ── Load projection module & buffer ─────────────────────────────────────
-    // Try to project to BNG for metric accuracy, but fall back gracefully
-    // if the geometry service is unavailable or slow
     let geom = selectedGeom;
+    showProgress(10, "Projecting geometry…");
     try {
       await Promise.race([
         projection.load(),
@@ -741,14 +742,35 @@ require([
       ]);
       const bng = new SpatialReference({ wkid: 27700 });
       const projected = projection.project(selectedGeom, bng);
-      if (projected) geom = projected;
+      if (projected) {
+        geom = projected;
+        console.log("Projected to BNG successfully");
+      }
     } catch(e) {
-      // Projection unavailable — continue with original geometry
-      // geodesicBuffer handles Web Mercator accurately for GB extents
+      console.log("Projection skipped:", e.message, "— using original geometry");
     }
 
-    const bufferMetres = bufferKm * 1000;
-    const bufGeom = geometryEngine.geodesicBuffer(geom, bufferMetres, "meters");
+    showProgress(20, "Creating buffer…");
+    console.log("Buffer input geometry type:", geom.type, "SR:", geom.spatialReference?.wkid);
+
+    let bufGeom;
+    try {
+      bufGeom = geometryEngine.geodesicBuffer(geom, bufferMetres, "meters");
+      console.log("Buffer created:", !!bufGeom);
+    } catch(e) {
+      console.error("geodesicBuffer failed:", e);
+    }
+
+    // Fallback to planar buffer if geodesic fails
+    if (!bufGeom) {
+      console.log("Trying planar buffer as fallback…");
+      try {
+        bufGeom = geometryEngine.buffer(geom, bufferMetres, "meters");
+        console.log("Planar buffer created:", !!bufGeom);
+      } catch(e) {
+        console.error("Planar buffer also failed:", e);
+      }
+    }
 
     if (!bufGeom) {
       setStatus("error", "Failed to create buffer. Check the geometry of the selected feature.");
