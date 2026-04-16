@@ -376,7 +376,7 @@
   </svg>
   <div>
     <h1><strong>Clarkson & Woods Automated Desk Study</strong></h1>
-    <p>Query layers within a pre-selected buffer distance of your RLB to produce a report paragraphe</p>
+    <p>Query layers within a pre-selected buffer distance of your RLB to produce a report paragraph</p>
   </div>
 </header>
 
@@ -728,17 +728,24 @@ require([
     document.getElementById("reportBox").classList.remove("visible");
 
     setStatus("running", "Building buffer and querying layers…");
-    showProgress(0, "Projecting geometry…");
+    showProgress(5, "Building buffer…");
 
     // ── Load projection module & buffer ─────────────────────────────────────
-    await projection.load();
-
-    const bng = new SpatialReference({ wkid: 27700 });
+    // Try to project to BNG for metric accuracy, but fall back gracefully
+    // if the geometry service is unavailable or slow
     let geom = selectedGeom;
     try {
-      const projected = projection.project(geom, bng);
+      await Promise.race([
+        projection.load(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 4000))
+      ]);
+      const bng = new SpatialReference({ wkid: 27700 });
+      const projected = projection.project(selectedGeom, bng);
       if (projected) geom = projected;
-    } catch(e) { /* fall through — buffer still works in web mercator */ }
+    } catch(e) {
+      // Projection unavailable — continue with original geometry
+      // geodesicBuffer handles Web Mercator accurately for GB extents
+    }
 
     const bufferMetres = bufferKm * 1000;
     const bufGeom = geometryEngine.geodesicBuffer(geom, bufferMetres, "meters");
