@@ -686,8 +686,8 @@
   </div>
 </div>
 
-<!-- docx.js for Word export -->
-<script src="https://cdn.jsdelivr.net/npm/docx@8.2.3/build/index.js"></script>
+<!-- html-docx-js: converts HTML to DOCX in the browser -->
+<script src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
 
 <!-- ── Script ────────────────────────────────────────────────────────────── -->
 <script>
@@ -1498,166 +1498,44 @@ require([
 
   // ── Copy ──────────────────────────────────────────────────────────────────
   // ── Export to Word ────────────────────────────────────────────────────────
-  window.exportToWord = async function() {
+  window.exportToWord = function() {
     const btn = document.getElementById("btnExport");
-    btn.textContent = "Generating…";
+    btn.textContent = "Generating\u2026";
     btn.disabled = true;
-
     try {
-      // docx.js may export as window.docx or window.docx.docx depending on build
-      const docxLib = window.docx || window.docxjs;
-      if (!docxLib) throw new Error("docx library not loaded — check CDN");
-
-      const { Document, Paragraph, Table, TableRow, TableCell, TextRun,
-              AlignmentType, WidthType, BorderStyle,
-              ShadingType, Packer } = docxLib;
-
-      const FONT   = "Century Gothic";
-      const SZ     = 18;   // 9pt in half-points
-      const SZ_SM  = 16;   // 8pt
-      const GREEN  = "1a3d2b";
-      const LINE   = "c9dece";
-      const BG_ALT = "f4f9f5";
-
-      // Parse the report HTML into docx elements
-      const el = document.getElementById("reportBody");
-      const children = [];
-
-      function makeRun(text, opts = {}) {
-        return new TextRun({
-          text,
-          font: FONT,
-          size: opts.small ? SZ_SM : SZ,
-          bold: opts.bold || false,
-          italics: opts.italic || false,
-          color: opts.color || "000000",
-        });
-      }
-
-      function makePara(runs, opts = {}) {
-        return new Paragraph({
-          children: Array.isArray(runs) ? runs : [runs],
-          spacing: { after: 80, before: opts.before || 0 },
-          alignment: AlignmentType.LEFT,
-        });
-      }
-
-      function makeHeading(text, level) {
-        return new Paragraph({
-          children: [new TextRun({ text, font: FONT, size: SZ, bold: true, color: GREEN })],
-          spacing: { before: level === 1 ? 200 : 120, after: 60 },
-        });
-      }
-
-      function makeTableFromNode(tableEl) {
-        const rows = [];
-        const trEls = tableEl.querySelectorAll("tr");
-        trEls.forEach((trEl, ri) => {
-          const cells = [];
-          const tdEls = trEl.querySelectorAll("th, td");
-          tdEls.forEach(tdEl => {
-            const isHeader = tdEl.tagName === "TH";
-            const text = tdEl.innerText.trim();
-            cells.push(new TableCell({
-              children: [new Paragraph({
-                children: [new TextRun({
-                  text,
-                  font: FONT,
-                  size: SZ_SM,
-                  bold: isHeader,
-                  color: isHeader ? "ffffff" : "000000",
-                })],
-                spacing: { after: 40, before: 40 },
-              })],
-              shading: isHeader
-                ? { fill: GREEN, type: ShadingType.CLEAR, color: GREEN }
-                : ri % 2 === 0
-                  ? { fill: "ffffff", type: ShadingType.CLEAR }
-                  : { fill: BG_ALT, type: ShadingType.CLEAR },
-              borders: {
-                top:    { style: BorderStyle.SINGLE, size: 4, color: LINE },
-                bottom: { style: BorderStyle.SINGLE, size: 4, color: LINE },
-                left:   { style: BorderStyle.SINGLE, size: 4, color: LINE },
-                right:  { style: BorderStyle.SINGLE, size: 4, color: LINE },
-              },
-              width: { size: Math.floor(9000 / tdEls.length), type: WidthType.DXA },
-            }));
-          });
-          rows.push(new TableRow({ children: cells }));
-        });
-        return new Table({
-          rows,
-          width: { size: 9000, type: WidthType.DXA },
-        });
-      }
-
-      // Walk child nodes of reportBody
-      el.childNodes.forEach(node => {
-        if (node.nodeType !== 1) return;
-        const tag = node.tagName.toLowerCase();
-
-        if (tag === "h2") {
-          children.push(makeHeading(node.innerText, 1));
-        } else if (tag === "h3") {
-          children.push(makeHeading(node.innerText, 2));
-        } else if (tag === "p") {
-          // Check for para-num span
-          const numSpan = node.querySelector(".para-num");
-          const runs = [];
-          if (numSpan) {
-            runs.push(makeRun(numSpan.innerText + " ", { bold: true }));
-          }
-          // Remaining text (strip placeholder styling but keep text)
-          const textContent = node.innerText.replace(numSpan?.innerText || "", "").trim();
-          runs.push(makeRun(textContent));
-          children.push(makePara(runs));
-        } else if (tag === "ul") {
-          node.querySelectorAll("li").forEach(li => {
-            children.push(new Paragraph({
-              children: [makeRun("• " + li.innerText)],
-              spacing: { after: 40 },
-              indent: { left: 360 },
-            }));
-          });
-        } else if (tag === "table") {
-          children.push(makeTableFromNode(node));
-          children.push(makePara(makeRun(""))); // spacing after table
-        }
-      });
-
-      const doc = new Document({
-        styles: {
-          default: {
-            document: {
-              run: { font: FONT, size: SZ },
-              paragraph: { spacing: { after: 80 } },
-            },
-          },
-        },
-        sections: [{
-          properties: {
-            page: {
-              margin: { top: 720, bottom: 720, left: 1080, right: 720 },
-            },
-          },
-          children,
-        }],
-      });
-
-      const blob = await Packer.toBlob(doc);
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
+      if (typeof htmlDocx === "undefined") throw new Error("html-docx-js not loaded");
+      const reportHtml = document.getElementById("reportBody").innerHTML;
+      const fullHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<style>
+body,p,td,th,li,h2,h3{font-family:'Century Gothic','Trebuchet MS',sans-serif;font-size:9pt;color:#111d13}
+h2{font-size:9pt;font-weight:bold;margin:12pt 0 4pt;color:#1a3d2b}
+h3{font-size:9pt;font-weight:bold;margin:8pt 0 4pt}
+p{font-size:9pt;margin:0 0 5pt;line-height:1.4}
+.para-num{font-weight:bold}
+table{border-collapse:collapse;width:100%;font-size:8pt;margin:6pt 0 12pt}
+th{background-color:#1a3d2b;color:#ffffff;padding:4pt 6pt;font-size:8pt;border:1pt solid #1a3d2b}
+td{padding:4pt 6pt;font-size:8pt;border:1pt solid #c9dece;vertical-align:top}
+tr:nth-child(even) td{background-color:#f4f9f5}
+ul{margin:3pt 0 6pt 14pt}
+li{font-size:9pt;margin-bottom:2pt}
+.badge-intl{font-weight:bold;color:#1a3d2b}
+.badge-natl{font-weight:bold;color:#1a3a6b}
+.badge-local{font-weight:bold;color:#7a5200}
+.placeholder{color:#8a6200;font-style:italic}
+.citation-link{color:#2d6a4f;font-size:8pt}
+</style></head><body>${reportHtml}</body></html>`;
+      const blob = htmlDocx.asBlob(fullHtml, { orientation: "portrait", margins: { top: 720, right: 720, bottom: 720, left: 1080 } });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
       a.download = `Desk_Study_${new Date().toISOString().slice(0,10)}.docx`;
       a.click();
       URL.revokeObjectURL(url);
-
-      btn.textContent = "✓ Downloaded";
-      setTimeout(() => { btn.textContent = "📄 Export to Word"; btn.disabled = false; }, 2500);
-
+      btn.textContent = "\u2713 Downloaded";
+      setTimeout(() => { btn.textContent = "\uD83D\uDCC4 Export to Word"; btn.disabled = false; }, 2500);
     } catch(e) {
       console.error("Word export failed:", e);
-      btn.textContent = "Export failed";
+      btn.textContent = "Export failed \u2014 see console";
       btn.disabled = false;
     }
   };
