@@ -987,15 +987,15 @@ require([
     "Wildlife and Countryside Act 1981",
     "NERC Act S41 (England)",
     "NERC Act S42 (Wales)",
-    "Habitats and Species Regulations 2017",
+    "The Conservation of Habitats and Species Regulations",  // covers 2010 and 2017 versions
     "Protection of Badgers Act 1992",
-    "Birds Directive",
     "Habitats Directive",
+    // Note: "Birds Directive" deliberately excluded
   ];
 
-  // Only flag BoCC5 red-listed birds — not all red lists
-  // BoCC5 = Birds of Conservation Concern 5 (2021)
-  const BOCC5_MATCH = /bocc5|birds of conservation concern 5/i;
+  // Birds of Conservation Concern 5 — include Red and Amber listed birds
+  const BOCC5_MATCH = /birds of conservation concern 5|bocc5/i;
+  const BOCC5_STATUSES = ["red", "amber"];
 
   function setJnccStatus(msg, type) {
     const el = document.getElementById("jnccStatus");
@@ -1076,20 +1076,29 @@ require([
         const taxGroup= String(row["Taxon group"] || row["taxon group"] || row["TaxonGroup"] || row["Kingdom"] || "").trim();
 
         const isProtected = PROTECTED_CATEGORIES.some(c => repCat.includes(c));
-        // Only include BoCC5 red-listed birds (Red = threatened category in BoCC5)
-        const isBoCC5Red  = BOCC5_MATCH.test(repCat) && /^red$/i.test(desig.trim());
+        // BoCC5 Red and Amber listed birds
+        const isBoCC5 = BOCC5_MATCH.test(repCat) &&
+                        BOCC5_STATUSES.some(s => desig.trim().toLowerCase() === s);
 
-        if (!isProtected && !isBoCC5Red) return;
+        if (!isProtected && !isBoCC5) return;
 
-        const designLabel = isBoCC5Red
-          ? "BoCC5 Red List"
-          : repCat.replace("Habitats and Species Regulations 2017", "Hab. Regs. 2017")
-                  .replace("Wildlife and Countryside Act 1981", "WCA 1981")
-                  .replace("Protection of Badgers Act 1992", "Badgers Act 1992")
-                  .replace("NERC Act S41 (England)", "NERC S41")
-                  .replace("NERC Act S42 (Wales)", "NERC S42")
-                  .replace("Habitats Directive", "Hab. Dir.")
-                  .replace("Birds Directive", "Birds Dir.");
+        // Build label — include schedule/annex detail where available
+        let designLabel;
+        const rawDesig = String(row["Designation"] || row["Status"] || "").trim();
+        if (isBoCC5) {
+          designLabel = `BoCC5 ${desig.charAt(0).toUpperCase() + desig.slice(1).toLowerCase()} List`;
+        } else if (repCat.includes("Wildlife and Countryside Act 1981")) {
+          designLabel = rawDesig ? `WCA 1981 ${rawDesig}` : "WCA 1981";
+        } else if (repCat.includes("Conservation of Habitats and Species Regulations")) {
+          designLabel = rawDesig ? `Hab. Regs. ${rawDesig}` : "Hab. Regs.";
+        } else if (repCat.includes("Habitats Directive")) {
+          designLabel = rawDesig ? `Hab. Dir. ${rawDesig}` : "Hab. Dir.";
+        } else {
+          designLabel = repCat
+            .replace("Protection of Badgers Act 1992", "Badgers Act 1992")
+            .replace("NERC Act S41 (England)", "NERC S41")
+            .replace("NERC Act S42 (Wales)", "NERC S42");
+        }
 
         [taxName, comName].filter(Boolean).forEach(key => {
           if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
@@ -1440,14 +1449,64 @@ require([
       bufGeoms[cat] = g;
     }
 
-    // Draw the national buffer as the visual reference
-    if (bufferGraphic) view.graphics.remove(bufferGraphic);
-    bufferGraphic = new Graphic({
-      geometry: bufGeoms.national,
-      symbol: { type: "simple-fill", color: [0,110,60,0.06], outline: { color: [0,110,60,0.65], width: 1.5, style: "dash" } },
+    // Draw all buffer rings — one per unique distance, largest first, with labels
+    if (bufferGraphic) {
+      (Array.isArray(bufferGraphic) ? bufferGraphic : [bufferGraphic])
+        .forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
+    }
+    const bufferStyles = {
+      international: { color: [180, 30,  30,  0.04], outline: { color: [180, 30,  30,  0.75], width: 1.5, style: "dash" } },
+      national:      { color: [0,   110, 60,  0.04], outline: { color: [0,   110, 60,  0.75], width: 1.5, style: "dash" } },
+      local:         { color: [26,  90,  160, 0.04], outline: { color: [26,  90,  160, 0.75], width: 1.5, style: "dash" } },
+      records:       { color: [130, 60,  180, 0.04], outline: { color: [130, 60,  180, 0.75], width: 1.5, style: "dash" } },
+    };
+    const catLabels = { international: "International", national: "National", local: "Local", records: "Records" };
+
+    const drawnKm = new Set();
+    bufferGraphic = [];
+
+    // Sort largest first so smaller rings render on top
+    const catsBySize = Object.entries(bufGeoms)
+      .sort((a, b) => buffers[b[0]] - buffers[a[0]]);
+
+    catsBySize.forEach(([cat, geom]) => {
+      const km = buffers[cat];
+      if (drawnKm.has(km)) return;
+      drawnKm.add(km);
+
+      // Fill + outline ring
+      const fillG = new Graphic({
+        geometry: geom,
+        symbol: { type: "simple-fill", ...bufferStyles[cat] },
+        attributes: { type: "ecologicalBuffer" },
+      });
+      view.graphics.add(fillG);
+      bufferGraphic.push(fillG);
+
+      // Text label at the top of each ring
+      const ext = geom.extent;
+      if (ext) {
+        const labelG = new Graphic({
+          geometry: { type: "point", x: (ext.xmin + ext.xmax) / 2, y: ext.ymax, spatialReference: geom.spatialReference },
+          symbol: {
+            type: "text",
+            color: bufferStyles[cat].outline.color.slice(0,3).concat([1]),
+            haloColor: [255,255,255,0.8],
+            haloSize: 2,
+            text: `${km}km (${catLabels[cat]})`,
+            font: { size: 10, family: "sans-serif" },
+            verticalAlignment: "bottom",
+          },
+          attributes: { type: "ecologicalBuffer" },
+        });
+        view.graphics.add(labelG);
+        bufferGraphic.push(labelG);
+      }
     });
-    view.graphics.add(bufferGraphic);
-    view.goTo({ target: bufGeoms.international, padding: { top: 40, bottom: 40, left: 40, right: 40 } });
+
+    // Zoom to the largest buffer
+    const largestGeom = catsBySize[0]?.[1];
+    if (largestGeom) view.goTo({ target: largestGeom, padding: { top: 60, bottom: 40, left: 40, right: 40 } });
 
     // ── Query all layers in parallel ─────────────────────────────────────────
     // Recursively find a layer by title through group layers
@@ -2487,7 +2546,11 @@ require([
     if (clickHandler) { clickHandler.remove(); clickHandler = null; }
     if (full) {
       selectedGeom = null;
-      if (bufferGraphic) { view.graphics.remove(bufferGraphic); bufferGraphic = null; }
+      if (bufferGraphic) {
+        (Array.isArray(bufferGraphic) ? bufferGraphic : [bufferGraphic])
+          .forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
+        bufferGraphic = null;
+      }
       document.getElementById("btnSelect").classList.remove("selecting", "selected");
       document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
       document.getElementById("btnRun").disabled = true;
