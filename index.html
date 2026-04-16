@@ -1091,67 +1091,84 @@ require([
       setJnccStatus(`⏳ Building lookup (${rows.length} rows)…`, "loading");
 
       const lookup = {};
-      const isSummarySheet = /summary/i.test(sheetName);
+      const isSummarySheet = isSummary;
 
       if (isSummarySheet) {
-        // Summary sheet: one row per taxon, designation columns contain values like Y/blank/Red/Amber
-        // Latin name column is typically "Recommended taxon name" or similar
-        // We need to find: latin name col, common name col, taxon group col,
-        // then check each designation column
+        // Summary sheet columns (from actual spreadsheet):
+        // Recommended_taxon_name, Common_name, Taxon_group
+        // Designation cols prefixed like "C: Birds Directive", "D: Habitats Directive",
+        // "O: WCA Sch 1", "P: WCA Sch 5", "Q: WCA Sch 8",
+        // "AD: Habitats and Species Regulations 2017 Sch 2",
+        // "AE: Habitats and Species Regulations 2017 Sch 4",
+        // "BF: Protection of Badgers Act", "EE: NERC Act S41", "EF: NERC Act S42",
+        // "GB: Birds of Conservation Concern 5" (value = Red / Amber / Green)
 
-        const latinCol  = headers.find(h => /recommended taxon|latin|scientific/i.test(h));
-        const commonCol = headers.find(h => /common name/i.test(h));
-        const groupCol  = headers.find(h => /taxon group|kingdom/i.test(h));
-        console.log("JNCC cols — latin:", latinCol, "common:", commonCol, "group:", groupCol);
+        const latinCol  = headers.find(h => /^Recommended_taxon_name$/i.test(h) || /recommended.*taxon.*name/i.test(h));
+        const commonCol = headers.find(h => /^Common_name$/i.test(h) || /common.?name/i.test(h));
+        const groupCol  = headers.find(h => /^Taxon_group$/i.test(h) || /taxon.?group/i.test(h));
+
+        // Map each designation column to a label function
+        // We pattern-match on the column header value
+        const desigCols = [];
+        headers.forEach(h => {
+          const hl = h.toLowerCase();
+          // Skip identity/admin columns
+          if (/recommended|common_name|taxon_group|authority|qualifier|version|sort|note|for further/i.test(h)) return;
+
+          if (/wca.*sch.*1|wca.*schedule.*1|sch.*1.*wca/i.test(hl))
+            desigCols.push({ h, label: () => "WCA 1981 Schedule 1" });
+          else if (/wca.*sch.*5|wca.*schedule.*5|sch.*5.*wca/i.test(hl))
+            desigCols.push({ h, label: () => "WCA 1981 Schedule 5" });
+          else if (/wca.*sch.*8|wca.*schedule.*8|sch.*8.*wca/i.test(hl))
+            desigCols.push({ h, label: () => "WCA 1981 Schedule 8" });
+          else if (/wildlife.*countryside|wca/i.test(hl) && !/birds/i.test(hl))
+            desigCols.push({ h, label: (v) => `WCA 1981 ${v}` });
+          else if (/habitats.*species.*reg.*sch.*2|hab.*reg.*sch.*2/i.test(hl))
+            desigCols.push({ h, label: () => "Hab. Regs. Schedule 2" });
+          else if (/habitats.*species.*reg.*sch.*4|hab.*reg.*sch.*4/i.test(hl))
+            desigCols.push({ h, label: () => "Hab. Regs. Schedule 4" });
+          else if (/habitats.*species.*reg.*sch.*5|hab.*reg.*sch.*5/i.test(hl))
+            desigCols.push({ h, label: () => "Hab. Regs. Schedule 5" });
+          else if (/habitats.*species.*reg|hab.*reg|conservation.*habitat.*reg/i.test(hl))
+            desigCols.push({ h, label: (v) => `Hab. Regs. ${v}` });
+          else if (/habitats directive.*ann.*2|hab.*dir.*ann.*2/i.test(hl))
+            desigCols.push({ h, label: () => "Hab. Dir. Annex II" });
+          else if (/habitats directive.*ann.*4|hab.*dir.*ann.*4/i.test(hl))
+            desigCols.push({ h, label: () => "Hab. Dir. Annex IV" });
+          else if (/habitats directive.*ann.*5|hab.*dir.*ann.*5/i.test(hl))
+            desigCols.push({ h, label: () => "Hab. Dir. Annex V" });
+          else if (/habitats directive/i.test(hl))
+            desigCols.push({ h, label: (v) => `Hab. Dir. ${v}` });
+          else if (/nerc.*s41|s41.*england|principal.*england/i.test(hl))
+            desigCols.push({ h, label: () => "NERC S41" });
+          else if (/nerc.*s42|s42.*wales|principal.*wales/i.test(hl))
+            desigCols.push({ h, label: () => "NERC S42" });
+          else if (/badger/i.test(hl))
+            desigCols.push({ h, label: () => "Badgers Act 1992" });
+          else if (/birds.*conservation.*concern.*5|bocc.*5|bocc5/i.test(hl) ||
+                   /red data categor.*birds|fd.*red data.*birds/i.test(hl))
+            desigCols.push({ h, label: (v) => `BoCC5 ${v.charAt(0).toUpperCase()+v.slice(1).toLowerCase()} List`, filter: (v) => /red|amber/i.test(v) });
+          // Exclude Birds Directive deliberately
+        });
+
+        console.log("JNCC desig cols found:", desigCols.map(d => d.h).join(" | "));
+        console.log("JNCC latinCol:", latinCol, "commonCol:", commonCol, "groupCol:", groupCol);
 
         rows.forEach(row => {
           const latinName = String(row[latinCol] || "").trim().toLowerCase();
           const comName   = String(row[commonCol] || "").trim().toLowerCase();
           const taxGroup  = String(row[groupCol]  || "").trim();
-          if (!latinName) return;
+          if (!latinName || latinName === "recommended_taxon_name") return;
 
           const designations = new Set();
-
-          // Check every header to see if it looks like a designation column
-          headers.forEach(h => {
+          desigCols.forEach(({ h, label, filter }) => {
             const val = String(row[h] || "").trim();
-            if (!val || val === "0") return;
-
-            const hl = h.toLowerCase();
-
-            // WCA schedules
-            if (/wca|wildlife.*countryside/i.test(h)) {
-              designations.add(`WCA 1981 ${h.replace(/wca\s*/i,"").trim() || val}`);
-            }
-            // Habitat Regulations
-            else if (/hab.*reg|conservation.*habitat.*regulation/i.test(h)) {
-              designations.add(`Hab. Regs. ${h.replace(/hab.*regs?\s*/i,"").trim() || val}`);
-            }
-            // Habitats Directive
-            else if (/hab.*dir|habitats directive/i.test(h)) {
-              designations.add(`Hab. Dir. ${h.replace(/hab.*dir\s*/i,"").trim() || val}`);
-            }
-            // BoCC5 — value is Red or Amber
-            else if (/bocc5|bocc 5|birds.*conservation.*concern.*5/i.test(h)) {
-              if (/red|amber/i.test(val)) {
-                designations.add(`BoCC5 ${val.charAt(0).toUpperCase() + val.slice(1).toLowerCase()} List`);
-              }
-            }
-            // NERC S41/S42
-            else if (/nerc.*s41|s41.*england|principal.*england/i.test(h)) {
-              if (val && val !== "0") designations.add("NERC S41");
-            }
-            else if (/nerc.*s42|s42.*wales|principal.*wales/i.test(h)) {
-              if (val && val !== "0") designations.add("NERC S42");
-            }
-            // Badgers Act
-            else if (/badger/i.test(h)) {
-              if (val && val !== "0") designations.add("Badgers Act 1992");
-            }
+            if (!val || val === "0" || val === "N" || val === "") return;
+            if (filter && !filter(val)) return;
+            designations.add(label(val));
           });
 
           if (designations.size === 0) return;
-
           [latinName, comName].filter(Boolean).forEach(key => {
             if (!lookup[key]) lookup[key] = { taxonGroup: taxGroup, designations: new Set() };
             designations.forEach(d => lookup[key].designations.add(d));
