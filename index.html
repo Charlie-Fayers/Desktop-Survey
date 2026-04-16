@@ -686,8 +686,7 @@
   </div>
 </div>
 
-<!-- html-docx-js: converts HTML to DOCX in the browser -->
-<script src="https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js"></script>
+<!-- html-docx-js loaded dynamically after ArcGIS to avoid AMD conflict -->
 
 <!-- ── Script ────────────────────────────────────────────────────────────── -->
 <script>
@@ -892,11 +891,18 @@ require([
     popup: { autoOpenEnabled: false },  // suppress all popups
   });
 
-  // Once the map loads, build the layer panel
+  // Once the map loads, build the layer panel and load Word export library
   // Note: we do NOT force layer visibility — the map's default state is preserved.
   // Layers are queried via their REST endpoints regardless of visibility.
   view.when(() => {
     buildLayerPanel();
+
+    // Load html-docx-js dynamically AFTER ArcGIS/Dojo is ready to avoid AMD conflicts
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/html-docx-js@0.3.1/dist/html-docx.js";
+    s.onload = () => console.log("html-docx-js loaded:", typeof htmlDocx);
+    s.onerror = () => console.warn("html-docx-js failed to load");
+    document.body.appendChild(s);
   });
 
   // ── Layer panel ───────────────────────────────────────────────────────────
