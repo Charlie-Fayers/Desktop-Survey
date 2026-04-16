@@ -1039,12 +1039,31 @@ require([
       const sheetName = wb.SheetNames.find(n => /master/i.test(n)) || wb.SheetNames[0];
       if (!sheetName) throw new Error("No sheet found in workbook");
 
-      const rows = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
-      if (!rows.length) throw new Error("Sheet is empty");
+      // The sheet has introductory text rows before the actual data header.
+      // Read as raw array, find the row that contains known column headers,
+      // then re-parse from that row onward.
+      const raw = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" });
 
-      // Show actual column names in status bar so we can diagnose mismatches
-      const cols = Object.keys(rows[0]).join(" | ");
-      setJnccStatus(`⏳ Building lookup — cols: ${cols.slice(0,120)}`, "loading");
+      // Find the row index containing the actual column headers
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(raw.length, 20); i++) {
+        const rowStr = raw[i].join("|").toLowerCase();
+        if (rowStr.includes("taxon") && rowStr.includes("designation") && rowStr.includes("reporting")) {
+          headerRowIdx = i;
+          break;
+        }
+      }
+      if (headerRowIdx === -1) throw new Error(`Could not find header row. First rows: ${raw.slice(0,3).map(r=>r.slice(0,3).join(",")).join(" / ")}`);
+
+      // Re-parse using the found header row
+      const headers = raw[headerRowIdx];
+      const rows = raw.slice(headerRowIdx + 1).map(r => {
+        const obj = {};
+        headers.forEach((h, i) => { obj[String(h).trim()] = r[i] !== undefined ? r[i] : ""; });
+        return obj;
+      }).filter(r => Object.values(r).some(v => v !== ""));
+
+      setJnccStatus(`⏳ Building lookup — ${rows.length} rows, headers: ${headers.slice(0,5).join(" | ")}`, "loading");
 
       const lookup = {};
       rows.forEach(row => {
