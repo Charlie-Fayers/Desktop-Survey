@@ -1177,28 +1177,76 @@ require([
       console.log(`Querying "${cfg.title}" → ${url}`);
 
       try {
-        const outFields = ["*"];
-        const q = new Query({
-          geometry: bufGeom,
-          spatialRelationship: "intersects",
-          outFields: outFields,
-          returnGeometry: true,
-          num: 500,
-        });
-        const fs = await queryREST.executeQueryJSON(url, q);
-        const features = fs.features || [];
-        const rawNames = features
-          .map(f => f.attributes[cfg.nameField])
-          .filter(Boolean);
-        const unique = [...new Set(rawNames)];
+        // For groupByField layers (PHI etc.) we only need unique name values + count,
+        // not full geometry for every polygon — use a two-step approach:
+        // 1. Get true count, 2. Get unique name values (no geometry needed)
+        // For all other layers, paginate to get full feature list up to 2000.
 
-        results[cfg.title] = {
-          status: features.length > 0 ? "found" : "absent",
-          count: features.length,
-          names: unique,
-          features: features,
-          cfg,
-        };
+        const PAGE = 500;
+
+        if (cfg.groupByField) {
+          // Step 1: true count
+          const countQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" });
+          let trueCount = 0;
+          try { const cr = await queryREST.executeQueryJSON(url, countQ); trueCount = cr.count || 0; } catch(e) {}
+
+          // Step 2: get up to 2000 features for name values (no geometry)
+          const nameQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", outFields: [cfg.nameField], returnGeometry: false, num: 2000 });
+          const nameFs = await queryREST.executeQueryJSON(url, nameQ);
+          const rawNames = (nameFs.features || []).map(f => f.attributes[cfg.nameField]).filter(Boolean);
+          const unique = [...new Set(rawNames)];
+
+          results[cfg.title] = {
+            status: trueCount > 0 ? "found" : "absent",
+            count: trueCount,
+            names: unique,
+            features: [], // no geometry needed for groupByField layers
+            cfg,
+          };
+
+        } else {
+          // Paginate to get all features (geometry + attributes), capped at 2000
+          const allFeatures = [];
+          let offset = 0;
+          const MAX = 2000;
+
+          while (offset < MAX) {
+            const q = new Query({
+              geometry: bufGeom,
+              spatialRelationship: "intersects",
+              outFields: ["*"],
+              returnGeometry: true,
+              num: PAGE,
+              start: offset,
+            });
+            const fs = await queryREST.executeQueryJSON(url, q);
+            const batch = fs.features || [];
+            allFeatures.push(...batch);
+            if (batch.length < PAGE) break; // no more pages
+            offset += PAGE;
+          }
+
+          // If we hit the 2000 cap, get the true count separately
+          let trueCount = allFeatures.length;
+          if (allFeatures.length >= MAX) {
+            try {
+              const countQ = new Query({ geometry: bufGeom, spatialRelationship: "intersects", returnCountOnly: true, where: "1=1" });
+              const cr = await queryREST.executeQueryJSON(url, countQ);
+              trueCount = cr.count || allFeatures.length;
+            } catch(e) {}
+          }
+
+          const rawNames = allFeatures.map(f => f.attributes[cfg.nameField]).filter(Boolean);
+          const unique = [...new Set(rawNames)];
+
+          results[cfg.title] = {
+            status: allFeatures.length > 0 ? "found" : "absent",
+            count: trueCount,
+            names: unique,
+            features: allFeatures,
+            cfg,
+          };
+        }
       } catch(e) {
         results[cfg.title] = { status: "missing", cfg, error: e.message };
       }
@@ -1403,32 +1451,26 @@ require([
       html += P(`No designated or priority habitats were identified within the ${bufLabel} search radius.`);
     } else {
       for (const r of habitats) {
-        const habRows = [];
-        for (const f of r.features) {
-          const name  = f.attributes[r.cfg.nameField] || "Unclassified";
-          const distM = await nearestDistanceM(f.geometry, rlbGeom);
-          const dir   = directionFromRlb(rlbGeom, f.geometry);
-          const ha    = formatHa(f.attributes);
-          habRows.push({ name, distM, dir, ha });
-        }
-        habRows.sort((a, b) => (a.distM || 0) - (b.distM || 0));
-        const count = habRows.length;
+        const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
 
         if (r.cfg.groupByField) {
-          const byType = {};
-          habRows.forEach(f => {
-            if (!byType[f.name]) byType[f.name] = { count: 0, minDist: f.distM ?? Infinity, dir: f.dir };
-            byType[f.name].count++;
-            if ((f.distM ?? Infinity) < byType[f.name].minDist) { byType[f.name].minDist = f.distM; byType[f.name].dir = f.dir; }
-          });
-          const types = Object.entries(byType).sort((a,b) => a[1].minDist - b[1].minDist);
-          html += P(`${count} parcel${count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer, comprising the following habitat types:`);
-          html += `<ul>` + types.map(([type, d]) =>
-            `<li><strong>${type}</strong> — ${d.count} parcel${d.count !== 1 ? "s" : ""}, nearest ${locStr(d.minDist === Infinity ? null : d.minDist, d.dir)}</li>`
+          // names already deduplicated unique habitat types, no geometry needed
+          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer, comprising the following habitat types:`);
+          html += `<ul>` + r.names.map(type =>
+            `<li><strong>${type}</strong></li>`
           ).join("") + `</ul>`;
         } else {
-          html += P(`${count} parcel${count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
-          if (count <= 15) {
+          const habRows = [];
+          for (const f of r.features) {
+            const name  = f.attributes[r.cfg.nameField] || "Unclassified";
+            const distM = await nearestDistanceM(f.geometry, rlbGeom);
+            const dir   = directionFromRlb(rlbGeom, f.geometry);
+            const ha    = formatHa(f.attributes);
+            habRows.push({ name, distM, dir, ha });
+          }
+          habRows.sort((a, b) => (a.distM || 0) - (b.distM || 0));
+          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
+          if (habRows.length <= 15) {
             html += `<ul>` + habRows.map(f =>
               `<li><strong>${f.name}</strong>${f.ha ? ` (${f.ha} ha)` : ""} — ${locStr(f.distM, f.dir)}</li>`
             ).join("") + `</ul>`;
@@ -1442,8 +1484,8 @@ require([
     if (rivers.length) {
       html += `<h2>Watercourses and River Habitats</h2>`;
       for (const r of rivers) {
-        const count = r.features.length;
-        html += P(`${count} feature${count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer ${count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
+        const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
+        html += P(`${countLabel} feature${r.count !== 1 ? "s" : ""} of the ${r.cfg.shortName} layer ${r.count !== 1 ? "were" : "was"} identified within the ${bufLabel} buffer.`);
       }
     }
 
@@ -1460,9 +1502,9 @@ require([
     if (records.length) {
       html += `<h2>Biodiversity Records</h2>`;
       for (const r of records) {
-        const count = r.features.length;
+        const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
         const uniqueNames = [...new Set(r.features.map(f => f.attributes[r.cfg.nameField]).filter(Boolean))];
-        html += P(`A total of ${count} ${r.cfg.shortName} ${count !== 1 ? "were" : "was"} retrieved within the ${bufLabel} buffer.`);
+        html += P(`A total of ${countLabel} ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} retrieved within the ${bufLabel} buffer.`);
         if (uniqueNames.length) {
           const listed = uniqueNames.slice(0, r.cfg.maxList || 5);
           const rem = uniqueNames.length - listed.length;
@@ -1714,10 +1756,9 @@ require([
   };
 
   async function suggestSearch(query) {
-    // First search RLB layer features, then geocode
     const results = [];
 
-    // Search red line boundary layer by attribute
+    // ── Search Red Line Boundary layer ───────────────────────────────────────
     try {
       const redLayers = [];
       function collectRed(layers) {
@@ -1727,30 +1768,38 @@ require([
         });
       }
       collectRed(webMap.layers);
+      console.log("RLB layers found:", redLayers.map(l => `${l.title} [${l.type}] url=${l.url}`));
 
       for (const layer of redLayers) {
+        // Ensure layer is loaded so its URL is available
+        try { await layer.load(); } catch(e) {}
+
         let url = layer.url;
-        if (layer.layerId !== undefined) url += `/${layer.layerId}`;
+        if (!url) { console.log("RLB layer has no URL:", layer.title); continue; }
+        if (layer.layerId !== undefined && layer.layerId !== null) url += `/${layer.layerId}`;
+        console.log("Searching RLB at:", url);
+
         const q = new Query({
           where: `UPPER(Label) LIKE UPPER('%${query.replace(/'/g,"''")}%') OR UPPER(Name) LIKE UPPER('%${query.replace(/'/g,"''")}%')`,
           outFields: ["*"],
           returnGeometry: true,
-          num: 5,
+          num: 8,
         });
         try {
           const fs = await queryREST.executeQueryJSON(url, q);
+          console.log("RLB search results:", fs.features?.length);
           (fs.features || []).forEach(f => {
-            // Try all common label field name casings
-            const name = f.attributes["Label"] || f.attributes["LABEL"] || f.attributes["label"] ||
-                         f.attributes["Name"] || f.attributes["NAME"] || f.attributes["name"] ||
-                         `Feature ${f.attributes["OBJECTID"]}`;
+            const attrs = f.attributes;
+            const name = attrs["Label"] || attrs["LABEL"] || attrs["label"] ||
+                         attrs["Name"]  || attrs["NAME"]  || attrs["name"]  ||
+                         `Feature ${attrs["OBJECTID"]}`;
             results.push({ label: name, type: "RLB", geometry: f.geometry });
           });
-        } catch(e) { console.log("RLB search error:", e); }
+        } catch(e) { console.log("RLB query error:", e.message); }
       }
-    } catch(e) {}
+    } catch(e) { console.log("RLB search outer error:", e.message); }
 
-    // Geocode using ArcGIS World Geocoding Service
+    // ── Geocode ───────────────────────────────────────────────────────────────
     try {
       const encoded = encodeURIComponent(query + ", United Kingdom");
       const resp = await fetch(
