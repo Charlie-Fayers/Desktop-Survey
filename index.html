@@ -476,6 +476,71 @@
     .lp-layer-label { font-size: 11px; color: var(--ink-mid); flex: 1; line-height: 1.3; }
     .lp-layer-row.wms .lp-layer-label { font-style: italic; color: var(--ink-faint); }
 
+    /* ── Search bar ─────────────────────────────────────────────── */
+    #searchBar {
+      position: absolute;
+      top: 12px; left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: visible;
+      width: 320px;
+    }
+    #searchInput {
+      flex: 1;
+      padding: 6px 10px;
+      border: none;
+      outline: none;
+      font-size: 12px;
+      font-family: 'Georgia', serif;
+      color: var(--ink);
+      background: transparent;
+      min-width: 0;
+    }
+    #searchBtn {
+      padding: 6px 10px;
+      background: var(--green-dark);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      flex-shrink: 0;
+      transition: background .15s;
+    }
+    #searchBtn:hover { background: var(--green-mid); }
+    #searchResults {
+      position: absolute;
+      top: 100%;
+      left: 0; right: 0;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-top: none;
+      border-radius: 0 0 var(--radius) var(--radius);
+      box-shadow: var(--shadow);
+      display: none;
+      z-index: 20;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    #searchResults.active { display: block; }
+    .search-result-item {
+      padding: 7px 10px;
+      font-size: 11px;
+      color: var(--ink-mid);
+      cursor: pointer;
+      border-bottom: 1px solid var(--line);
+      line-height: 1.4;
+    }
+    .search-result-item:last-child { border-bottom: none; }
+    .search-result-item:hover { background: var(--bg); color: var(--green-dark); }
+    .search-result-item .result-type { font-size: 10px; color: var(--ink-faint); margin-left: 4px; }
+
     /* ── Map selecting overlay ──────────────────────────────────── */
     #selectOverlay {
       position: absolute;
@@ -550,7 +615,7 @@
 
       <button class="step-btn btn-run" id="btnRun" disabled onclick="runAnalysis()">
         <span class="step-num">2</span>
-        <span id="btnRunLabel">Run ecological screening</span>
+        <span id="btnRunLabel">Run Desk Study</span>
       </button>
 
       <!-- Progress -->
@@ -568,9 +633,9 @@
       <!-- Report -->
       <div class="report-box" id="reportBox">
         <div class="report-header">
-          <span>Screening Report</span>
+          <span>Desk Study Report</span>
           <div class="report-actions">
-            <button class="report-action-btn" id="btnCopy" onclick="copyReport()">Copy</button>
+            <button class="report-action-btn" id="btnExport" onclick="exportToWord()">&#x1F4C4; Export to Word</button>
             <button class="report-action-btn" onclick="resetTool()">Reset</button>
           </div>
         </div>
@@ -587,6 +652,15 @@
   <!-- Map -->
   <div id="viewDiv">
     <div id="selectOverlay">Click a red line boundary feature on the map</div>
+
+    <!-- Search bar -->
+    <div id="searchBar">
+      <input type="text" id="searchInput" placeholder="Search location or red line boundary…" autocomplete="off"
+        onkeydown="if(event.key==='Enter') runSearch()"
+        oninput="onSearchInput(this.value)" />
+      <button id="searchBtn" onclick="runSearch()">&#x1F50D;</button>
+      <div id="searchResults"></div>
+    </div>
 
     <!-- Layer panel toggle -->
     <button id="layerToggleBtn" onclick="toggleLayerPanel()">
@@ -611,6 +685,9 @@
     </div>
   </div>
 </div>
+
+<!-- docx.js for Word export -->
+<script src="https://unpkg.com/docx@8.2.3/build/index.js"></script>
 
 <!-- ── Script ────────────────────────────────────────────────────────────── -->
 <script>
@@ -1420,80 +1497,276 @@ require([
   }
 
   // ── Copy ──────────────────────────────────────────────────────────────────
-  window.copyReport = function() {
-    const el = document.getElementById("reportBody");
+  // ── Export to Word ────────────────────────────────────────────────────────
+  window.exportToWord = async function() {
+    const btn = document.getElementById("btnExport");
+    btn.textContent = "Generating…";
+    btn.disabled = true;
 
-    // ── Build styled HTML for clipboard (Word-compatible) ─────────────────
-    const styledHtml = `
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  body, p, td, th, li, h2, h3 {
-    font-family: 'Century Gothic', 'Avant Garde', sans-serif;
-  }
-  body { font-size: 9pt; }
-  h2 { font-size: 9pt; font-weight: bold; margin: 12pt 0 4pt; }
-  h3 { font-size: 9pt; font-weight: bold; margin: 8pt 0 4pt; }
-  p  { font-size: 9pt; margin: 0 0 6pt; }
-  .para-num { font-weight: bold; margin-right: 6pt; }
-  table { border-collapse: collapse; width: 100%; font-size: 8pt; margin: 6pt 0 12pt; }
-  th { background-color: #1a3d2b; color: white; padding: 4pt 6pt; text-align: left; font-size: 8pt; font-weight: normal; }
-  td { padding: 4pt 6pt; border: 1pt solid #c9dece; vertical-align: top; font-size: 8pt; }
-  tr:nth-child(even) td { background-color: #f4f9f5; }
-  ul { margin: 4pt 0 6pt 14pt; padding: 0; font-size: 9pt; }
-  li { margin-bottom: 2pt; font-size: 9pt; }
-  .badge { font-size: 8pt; font-weight: bold; }
-  .badge-intl  { color: #1a3d2b; }
-  .badge-natl  { color: #1a3a6b; }
-  .badge-local { color: #7a5200; }
-  .placeholder { color: #8a6200; font-style: italic; }
-  .citation-link { color: #2d6a4f; font-size: 8pt; }
-</style>
-</head>
-<body>
-${el.innerHTML}
-</body>
-</html>`;
+    try {
+      const { Document, Paragraph, Table, TableRow, TableCell, TextRun,
+              HeadingLevel, AlignmentType, WidthType, BorderStyle,
+              ShadingType, Packer } = docx;
 
-    // ── Write to clipboard as both HTML and plain text ─────────────────────
-    const plainText = el.innerText;
+      const FONT   = "Century Gothic";
+      const SZ     = 18;   // 9pt in half-points
+      const SZ_SM  = 16;   // 8pt
+      const GREEN  = "1a3d2b";
+      const LINE   = "c9dece";
+      const BG_ALT = "f4f9f5";
 
-    if (window.ClipboardItem) {
-      const htmlBlob  = new Blob([styledHtml], { type: "text/html" });
-      const textBlob  = new Blob([plainText],  { type: "text/plain" });
-      const item = new ClipboardItem({ "text/html": htmlBlob, "text/plain": textBlob });
-      navigator.clipboard.write([item]).then(() => {
-        flashCopied();
-      }).catch(() => {
-        // Fallback to plain text
-        navigator.clipboard.writeText(plainText).then(flashCopied);
+      // Parse the report HTML into docx elements
+      const el = document.getElementById("reportBody");
+      const children = [];
+
+      function makeRun(text, opts = {}) {
+        return new TextRun({
+          text,
+          font: FONT,
+          size: opts.small ? SZ_SM : SZ,
+          bold: opts.bold || false,
+          italics: opts.italic || false,
+          color: opts.color || "000000",
+        });
+      }
+
+      function makePara(runs, opts = {}) {
+        return new Paragraph({
+          children: Array.isArray(runs) ? runs : [runs],
+          spacing: { after: 80, before: opts.before || 0 },
+          alignment: AlignmentType.LEFT,
+        });
+      }
+
+      function makeHeading(text, level) {
+        return new Paragraph({
+          children: [new TextRun({ text, font: FONT, size: SZ, bold: true, color: GREEN })],
+          spacing: { before: level === 1 ? 200 : 120, after: 60 },
+        });
+      }
+
+      function makeTableFromNode(tableEl) {
+        const rows = [];
+        const trEls = tableEl.querySelectorAll("tr");
+        trEls.forEach((trEl, ri) => {
+          const cells = [];
+          const tdEls = trEl.querySelectorAll("th, td");
+          tdEls.forEach(tdEl => {
+            const isHeader = tdEl.tagName === "TH";
+            const text = tdEl.innerText.trim();
+            cells.push(new TableCell({
+              children: [new Paragraph({
+                children: [new TextRun({
+                  text,
+                  font: FONT,
+                  size: SZ_SM,
+                  bold: isHeader,
+                  color: isHeader ? "ffffff" : "000000",
+                })],
+                spacing: { after: 40, before: 40 },
+              })],
+              shading: isHeader
+                ? { fill: GREEN, type: ShadingType.CLEAR, color: GREEN }
+                : ri % 2 === 0
+                  ? { fill: "ffffff", type: ShadingType.CLEAR }
+                  : { fill: BG_ALT, type: ShadingType.CLEAR },
+              borders: {
+                top:    { style: BorderStyle.SINGLE, size: 4, color: LINE },
+                bottom: { style: BorderStyle.SINGLE, size: 4, color: LINE },
+                left:   { style: BorderStyle.SINGLE, size: 4, color: LINE },
+                right:  { style: BorderStyle.SINGLE, size: 4, color: LINE },
+              },
+              width: { size: Math.floor(9000 / tdEls.length), type: WidthType.DXA },
+            }));
+          });
+          rows.push(new TableRow({ children: cells }));
+        });
+        return new Table({
+          rows,
+          width: { size: 9000, type: WidthType.DXA },
+        });
+      }
+
+      // Walk child nodes of reportBody
+      el.childNodes.forEach(node => {
+        if (node.nodeType !== 1) return;
+        const tag = node.tagName.toLowerCase();
+
+        if (tag === "h2") {
+          children.push(makeHeading(node.innerText, 1));
+        } else if (tag === "h3") {
+          children.push(makeHeading(node.innerText, 2));
+        } else if (tag === "p") {
+          // Check for para-num span
+          const numSpan = node.querySelector(".para-num");
+          const runs = [];
+          if (numSpan) {
+            runs.push(makeRun(numSpan.innerText + " ", { bold: true }));
+          }
+          // Remaining text (strip placeholder styling but keep text)
+          const textContent = node.innerText.replace(numSpan?.innerText || "", "").trim();
+          runs.push(makeRun(textContent));
+          children.push(makePara(runs));
+        } else if (tag === "ul") {
+          node.querySelectorAll("li").forEach(li => {
+            children.push(new Paragraph({
+              children: [makeRun("• " + li.innerText)],
+              spacing: { after: 40 },
+              indent: { left: 360 },
+            }));
+          });
+        } else if (tag === "table") {
+          children.push(makeTableFromNode(node));
+          children.push(makePara(makeRun(""))); // spacing after table
+        }
       });
-    } else {
-      // Older browser fallback — execCommand with styled content
-      const tmp = document.createElement("div");
-      tmp.innerHTML = styledHtml;
-      tmp.style.position = "fixed";
-      tmp.style.opacity  = "0";
-      document.body.appendChild(tmp);
-      const range = document.createRange();
-      range.selectNodeContents(tmp);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      document.execCommand("copy");
-      sel.removeAllRanges();
-      document.body.removeChild(tmp);
-      flashCopied();
+
+      const doc = new Document({
+        styles: {
+          default: {
+            document: {
+              run: { font: FONT, size: SZ },
+              paragraph: { spacing: { after: 80 } },
+            },
+          },
+        },
+        sections: [{
+          properties: {
+            page: {
+              margin: { top: 720, bottom: 720, left: 1080, right: 720 },
+            },
+          },
+          children,
+        }],
+      });
+
+      const blob = await Packer.toBlob(doc);
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `Desk_Study_${new Date().toISOString().slice(0,10)}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      btn.textContent = "✓ Downloaded";
+      setTimeout(() => { btn.textContent = "📄 Export to Word"; btn.disabled = false; }, 2500);
+
+    } catch(e) {
+      console.error("Word export failed:", e);
+      btn.textContent = "Export failed";
+      btn.disabled = false;
     }
   };
 
-  function flashCopied() {
-    const btn = document.getElementById("btnCopy");
-    btn.textContent = "✓ Copied";
-    btn.classList.add("copied");
-    setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2000);
+  // ── Search ────────────────────────────────────────────────────────────────
+  let searchDebounce = null;
+
+  window.onSearchInput = function(val) {
+    clearTimeout(searchDebounce);
+    if (!val.trim()) { hideSearchResults(); return; }
+    searchDebounce = setTimeout(() => suggestSearch(val), 300);
+  };
+
+  async function suggestSearch(query) {
+    // First search RLB layer features, then geocode
+    const results = [];
+
+    // Search red line boundary layer by attribute
+    try {
+      const redLayers = [];
+      function collectRed(layers) {
+        layers.forEach(l => {
+          if (CONFIG.redLineTitlePattern.test(l.title)) redLayers.push(l);
+          if (l.type === "group" && l.layers) collectRed(l.layers);
+        });
+      }
+      collectRed(webMap.layers);
+
+      for (const layer of redLayers) {
+        let url = layer.url;
+        if (layer.layerId !== undefined) url += `/${layer.layerId}`;
+        const q = new Query({
+          where: `UPPER(NAME) LIKE UPPER('%${query.replace(/'/g,"''")}%') OR UPPER(OBJECTID) LIKE '%${query}%'`,
+          outFields: ["*"],
+          returnGeometry: true,
+          num: 5,
+        });
+        try {
+          const fs = await queryREST.executeQueryJSON(url, q);
+          (fs.features || []).forEach(f => {
+            const name = f.attributes["NAME"] || f.attributes["name"] || `Feature ${f.attributes["OBJECTID"]}`;
+            results.push({ label: name, type: "RLB", geometry: f.geometry });
+          });
+        } catch(e) {}
+      }
+    } catch(e) {}
+
+    // Geocode using ArcGIS World Geocoding Service
+    try {
+      const encoded = encodeURIComponent(query + ", United Kingdom");
+      const resp = await fetch(
+        `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/suggest?text=${encoded}&maxSuggestions=5&f=json`
+      );
+      const data = await resp.json();
+      (data.suggestions || []).forEach(s => {
+        results.push({ label: s.text, type: "Place", magicKey: s.magicKey });
+      });
+    } catch(e) {}
+
+    showSearchResults(results);
   }
+
+  window.runSearch = function() {
+    suggestSearch(document.getElementById("searchInput").value);
+  };
+
+  function showSearchResults(results) {
+    const container = document.getElementById("searchResults");
+    container.innerHTML = "";
+    if (!results.length) {
+      container.innerHTML = `<div class="search-result-item" style="color:var(--ink-faint)">No results found</div>`;
+      container.classList.add("active");
+      return;
+    }
+    results.forEach(r => {
+      const div = document.createElement("div");
+      div.className = "search-result-item";
+      div.innerHTML = `${r.label} <span class="result-type">${r.type}</span>`;
+      div.onclick = () => selectSearchResult(r);
+      container.appendChild(div);
+    });
+    container.classList.add("active");
+  }
+
+  function hideSearchResults() {
+    document.getElementById("searchResults").classList.remove("active");
+  }
+
+  async function selectSearchResult(result) {
+    document.getElementById("searchInput").value = result.label;
+    hideSearchResults();
+
+    if (result.geometry) {
+      // RLB feature — zoom directly
+      view.goTo({ target: result.geometry, zoom: 15 });
+    } else if (result.magicKey) {
+      // Geocoded place — get full location
+      try {
+        const encoded = encodeURIComponent(result.label);
+        const resp = await fetch(
+          `https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates?SingleLine=${encoded}&magicKey=${result.magicKey}&outFields=&f=json`
+        );
+        const data = await resp.json();
+        const loc  = data.candidates?.[0]?.location;
+        if (loc) view.goTo({ target: { x: loc.x, y: loc.y, spatialReference: { wkid: 4326 } }, zoom: 14 });
+      } catch(e) {}
+    }
+  }
+
+  // Close search results when clicking outside
+  document.addEventListener("click", e => {
+    if (!document.getElementById("searchBar")?.contains(e.target)) hideSearchResults();
+  });
 
   // ── Reset ─────────────────────────────────────────────────────────────────
   window.resetTool = function() {
@@ -1508,7 +1781,7 @@ ${el.innerHTML}
       document.getElementById("btnSelect").classList.remove("selecting", "selected");
       document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
       document.getElementById("btnRun").disabled = true;
-      document.getElementById("btnRunLabel").textContent = "Run ecological screening";
+      document.getElementById("btnRunLabel").textContent = "Run Desk Study";
       document.getElementById("layerResults").style.display = "none";
       document.getElementById("reportBox").classList.remove("visible");
       document.getElementById("btnReset").style.display = "none";
@@ -1540,7 +1813,7 @@ ${el.innerHTML}
   }
   function resetRunButton() {
     document.getElementById("btnRun").disabled = false;
-    document.getElementById("btnRunLabel").textContent = "Run ecological screening";
+    document.getElementById("btnRunLabel").textContent = "Run Desk Study";
   }
 
 }); // end require
