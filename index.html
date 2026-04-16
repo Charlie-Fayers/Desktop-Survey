@@ -9,14 +9,22 @@
   <link rel="stylesheet" href="https://js.arcgis.com/4.29/esri/themes/light/main.css" />
   <script src="https://js.arcgis.com/4.29/"></script>
 
-  <!-- SheetJS loaded AFTER ArcGIS — uses esm build to avoid Dojo AMD conflict -->
+  <!-- SheetJS: suppress AMD before loading so Dojo doesn't consume it -->
   <script>
-    // Inject SheetJS after Dojo has claimed the AMD loader
     (function() {
       var s = document.createElement("script");
       s.src = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
-      s.onload = function() { console.log("SheetJS ready:", typeof XLSX); };
-      s.onerror = function() { console.warn("SheetJS failed to load"); };
+      s.onload = function() { console.log("SheetJS ready, XLSX.read:", typeof (window.XLSX||{}).read); };
+      s.onerror = function() { console.warn("SheetJS CDN failed"); };
+      // Temporarily hide define.amd so SheetJS uses the window global path
+      var _amd;
+      if (typeof define === "function" && define.amd) {
+        _amd = define.amd;
+        define.amd = false;
+        var _restore = s.onload;
+        s.onload = function() { define.amd = _amd; _restore(); };
+        s.onerror = function() { define.amd = _amd; console.warn("SheetJS CDN failed"); };
+      }
       document.head.appendChild(s);
     })();
   </script>
@@ -1007,12 +1015,13 @@ require([
     // Wait for SheetJS to be available
     setJnccStatus("⏳ Waiting for SheetJS…", "loading");
     let waited = 0;
-    while (typeof XLSX === "undefined" && waited < 15000) {
+    while (!(window.XLSX && window.XLSX.read) && waited < 15000) {
       await new Promise(r => setTimeout(r, 300));
       waited += 300;
     }
-    if (typeof XLSX === "undefined") {
-      setJnccStatus("✗ SheetJS library failed to load. Species cross-referencing unavailable.", "error");
+    const xlsxLib = window.XLSX;
+    if (!xlsxLib || !xlsxLib.read) {
+      setJnccStatus("✗ SheetJS library did not expose XLSX.read. Species cross-referencing unavailable.", "error");
       jnccLookup = {};
       jnccLoading = false;
       return;
@@ -1025,12 +1034,12 @@ require([
 
       setJnccStatus("⏳ Parsing spreadsheet…", "loading");
       const buf  = await resp.arrayBuffer();
-      const wb   = XLSX.read(buf, { type: "array" });
+      const wb   = xlsxLib.read(buf, { type: "array" });
 
       const sheetName = wb.SheetNames.find(n => /master/i.test(n)) || wb.SheetNames[0];
       if (!sheetName) throw new Error("No sheet found in workbook");
 
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+      const rows = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
       if (!rows.length) throw new Error("Sheet is empty");
 
       // Log sample columns for debugging
