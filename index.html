@@ -1038,19 +1038,13 @@ require([
       const buf  = await resp.arrayBuffer();
       const wb   = xlsxLib.read(buf, { type: "array" });
 
-      const sheetName = wb.SheetNames.find(n => /master/i.test(n)) || wb.SheetNames[0];
-      if (!sheetName) throw new Error("No sheet found in workbook");
-
-      // Show all sheet names so we can confirm which one to use
-      setJnccStatus(`⏳ Sheets found: ${wb.SheetNames.join(", ")}`, "loading");
-      await new Promise(r => setTimeout(r, 1500)); // brief pause so user can read it
-
-      // Prefer the Summary sheet which has one row per taxon with all designations as columns
+      // Prefer Summary sheet (one row per taxon) over Master List
       const sheetName = wb.SheetNames.find(n => /summary/i.test(n)) ||
                         wb.SheetNames.find(n => /master/i.test(n)) ||
                         wb.SheetNames[0];
-      setJnccStatus(`⏳ Using sheet: "${sheetName}"`, "loading");
-      await new Promise(r => setTimeout(r, 1000));
+      if (!sheetName) throw new Error("No sheet found in workbook");
+
+      setJnccStatus(`⏳ Parsing sheet: "${sheetName}"…`, "loading");
 
       const raw = xlsxLib.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" });
 
@@ -1058,15 +1052,13 @@ require([
       let headerRowIdx = -1;
       for (let i = 0; i < Math.min(raw.length, 20); i++) {
         const rowStr = raw[i].join("|").toLowerCase();
-        // Summary sheet: look for taxon + some designation column
-        // Master sheet: look for taxon + designation + reporting
         if ((rowStr.includes("taxon") || rowStr.includes("recommended")) &&
             (rowStr.includes("wca") || rowStr.includes("designation") || rowStr.includes("bocc") || rowStr.includes("habitats"))) {
           headerRowIdx = i;
           break;
         }
       }
-      if (headerRowIdx === -1) throw new Error(`Header not found. First 3 rows: ${raw.slice(0,3).map(r=>r.slice(0,4).join(",")).join(" / ")}`);
+      if (headerRowIdx === -1) throw new Error(`Header not found. First row: ${raw[0]?.slice(0,5).join(", ")}`);
 
       const headers = raw[headerRowIdx].map(h => String(h).trim());
       const rows = raw.slice(headerRowIdx + 1).map(r => {
@@ -1075,9 +1067,11 @@ require([
         return obj;
       }).filter(r => Object.values(r).some(v => v !== ""));
 
-      // Show first 8 column names so we can see the structure
-      setJnccStatus(`⏳ ${rows.length} rows. ALL cols: ${headers.join(" | ")}`, "loading");
-      await new Promise(r => setTimeout(r, 8000)); // long pause so all cols can be read
+      // Log all column names to console for debugging
+      console.log("JNCC sheet:", sheetName, "| headers:", headers.join(" | "));
+      if (rows[0]) console.log("JNCC sample row:", JSON.stringify(rows[0]).slice(0, 300));
+
+      setJnccStatus(`⏳ Building lookup (${rows.length} rows)…`, "loading");
 
       const lookup = {};
       const isSummarySheet = /summary/i.test(sheetName);
@@ -1088,20 +1082,10 @@ require([
         // We need to find: latin name col, common name col, taxon group col,
         // then check each designation column
 
-        // Identify key columns by scanning header names
-        const latinCol   = headers.find(h => /recommended taxon|latin|scientific/i.test(h));
-        const commonCol  = headers.find(h => /common name/i.test(h));
-        const groupCol   = headers.find(h => /taxon group|kingdom/i.test(h));
-
-        // Show which name columns were found
-        setJnccStatus(`⏳ Name cols: latin="${latinCol}" common="${commonCol}" group="${groupCol}"`, "loading");
-        await new Promise(r => setTimeout(r, 3000));
-
-        // Designation columns — identify by known patterns
-        // Show a sample row so we can see what values look like
-        const sampleRow = rows[0] ? JSON.stringify(rows[0]).slice(0, 300) : "none";
-        setJnccStatus(`⏳ Sample row: ${sampleRow}`, "loading");
-        await new Promise(r => setTimeout(r, 5000));
+        const latinCol  = headers.find(h => /recommended taxon|latin|scientific/i.test(h));
+        const commonCol = headers.find(h => /common name/i.test(h));
+        const groupCol  = headers.find(h => /taxon group|kingdom/i.test(h));
+        console.log("JNCC cols — latin:", latinCol, "common:", commonCol, "group:", groupCol);
 
         rows.forEach(row => {
           const latinName = String(row[latinCol] || "").trim().toLowerCase();
