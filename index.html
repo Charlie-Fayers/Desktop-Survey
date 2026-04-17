@@ -869,38 +869,55 @@ require([
         shortName: "National Parks",
         nameField: "NAME", type: "statutory", maxList: 4 },
 
-      // ── Wales: statutory designations (WMS — display only, cannot query) ──
+      // ── Wales: statutory designations (DataMapWales WFS) ─────────────────
       { title: "SSSI",
         shortName: "Sites of Special Scientific Interest (SSSIs) (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "sssi_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_SSSI",
+        wfsNameFields: ["sssi_name","name","NAME"],
+        wfsAreaField: "cartesian_area_ha" },
 
       { title: "SAC",
         shortName: "Special Areas of Conservation (SACs) (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "sac_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_SAC",
+        wfsNameFields: ["sac_name","name","NAME"] },
 
       { title: "SPA",
         shortName: "Special Protection Areas (SPAs) (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "spa_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_SPA",
+        wfsNameFields: ["spa_name","name","NAME"] },
 
       { title: "RAMSAR",
         shortName: "Ramsar wetland sites (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "ramsar_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_RAMSAR",
+        wfsNameFields: ["ramsar_name","name","NAME"] },
 
       { title: "NNR",
         shortName: "National Nature Reserves (NNRs) (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "nnr_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_NNR",
+        wfsNameFields: ["nnr_name","name","NAME"] },
 
       { title: "LNR",
         shortName: "Local Nature Reserves (LNRs) (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "lnr_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_LNR",
+        wfsNameFields: ["lnr_name","name","NAME"] },
 
       { title: "AONB",
         shortName: "Areas of Outstanding Natural Beauty (AONBs) (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "aonb_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_AONB",
+        wfsNameFields: ["aonb_name","name","NAME"] },
 
       { title: "National Park",
         shortName: "National Parks (Wales)",
-        nameField: null, type: "statutory", wms: true },
+        nameField: "np_name", type: "statutory", wfs: true,
+        wfsType: "inspire-nrw:NRW_NATIONAL_PARK",
+        wfsNameFields: ["np_name","national_park_name","name","NAME"] },
 
       // ── England: habitats ─────────────────────────────────────────────────
       { title: "Ancient Woodland (England)",
@@ -912,14 +929,18 @@ require([
         nameField: "MainHabs", type: "habitat",
         groupByField: true, maxList: 6 },
 
-      // ── Wales: habitats (WMS — display only, cannot query) ───────────────
+      // ── Wales: habitats (DataMapWales WFS) ───────────────────────────────
       { title: "Ancient Woodland",
         shortName: "ancient woodland (Wales)",
-        nameField: null, type: "habitat", wms: true },
+        nameField: "name", type: "habitat", wfs: true,
+        wfsType: "inspire-nrw:NRW_ANCIENT_WOODLAND_INVENTORY_2021",
+        wfsNameFields: ["woodland_name","name","NAME","site_name"] },
 
       { title: "Priority Habitats - High sensitivity (Wales)",
         shortName: "Priority Habitats of high sensitivity (Wales)",
-        nameField: null, type: "habitat", wms: true },
+        nameField: "name", type: "habitat", wfs: true,
+        wfsType: "inspire-nrw:NRW_PHI",
+        wfsNameFields: ["habitat_type","main_habitat","name","NAME"] },
 
       // ── River habitats ────────────────────────────────────────────────────
       { title: "Priority River Habitat - Rivers (England)",
@@ -1570,6 +1591,7 @@ require([
 
     CONFIG.layers.forEach(cfg => {
       if (cfg.wms) return; // WMS layers not queryable — skip
+      if (cfg.wfs) { layerAssignments[cfg.title] = defaultCategory(cfg); } // WFS layers are queryable
       const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
       const container = document.querySelector(`.buf-layers[data-key="${cat}"]`);
       if (!container) return;
@@ -1764,8 +1786,65 @@ require([
     const results = {};
 
     const promises = CONFIG.layers.map(async cfg => {
-      // Pick the correct buffer geometry for this layer's category
       const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
+
+      // Welsh WFS layers — query DataMapWales GeoServer directly, no web map layer needed
+      if (cfg.wfs) {
+        try {
+          const bufGeom = bufGeoms[cat];
+          const ext = bufGeom.extent;
+          const toWGS84 = (x, y) => {
+            const lon = (x / 20037508.34) * 180;
+            const lat = (Math.atan(Math.exp((y / 20037508.34) * Math.PI)) * 360 / Math.PI) - 90;
+            return [lon, lat];
+          };
+          const [minLon, minLat] = toWGS84(ext.xmin, ext.ymin);
+          const [maxLon, maxLat] = toWGS84(ext.xmax, ext.ymax);
+          const bbox = `${minLon},${minLat},${maxLon},${maxLat},EPSG:4326`;
+          const wfsUrl = `https://datamap.gov.wales/geoserver/ows?service=WFS&version=1.0.0&request=GetFeature&typeName=${cfg.wfsType}&outputFormat=json&BBOX=${bbox}&srsName=EPSG:4326`;
+          console.log(`WFS query "${cfg.title}" → ${wfsUrl}`);
+          const resp = await fetch(wfsUrl);
+          if (!resp.ok) throw new Error(`WFS HTTP ${resp.status}`);
+          const geojson = await resp.json();
+          const features = geojson.features || [];
+          const getName = (props) => {
+            for (const f of cfg.wfsNameFields || []) {
+              if (props[f]) return String(props[f]).trim();
+            }
+            // Log available fields to help diagnose mismatches
+            console.log(`WFS "${cfg.title}" — no name field matched. Available props:`, Object.keys(props).join(", "));
+            return Object.values(props).find(v => typeof v === "string" && v.trim().length > 2) || "Unnamed";
+          };
+          const getArea = (props) => {
+            if (cfg.wfsAreaField && props[cfg.wfsAreaField]) {
+              return parseFloat(props[cfg.wfsAreaField]);
+            }
+            // Common area field names
+            for (const f of ["cartesian_area_ha","area_ha","area","Shape__Area"]) {
+              if (props[f]) return parseFloat(props[f]);
+            }
+            return null;
+          };
+          const names = [...new Set(features.map(f => getName(f.properties || {})).filter(n => n && n !== "Unnamed"))];
+          results[cfg.title] = {
+            status: features.length > 0 ? "found" : "absent",
+            count: features.length,
+            names,
+            features: features.map(f => ({
+              geometry: null,
+              attributes: { ...f.properties, _area_ha: getArea(f.properties || {}) },
+            })),
+            bufKm: buffers[cat],
+            cfg,
+          };
+        } catch(e) {
+          console.warn(`WFS "${cfg.title}" failed:`, e.message);
+          results[cfg.title] = { status: "missing", cfg, error: `WFS failed: ${e.message}`, wfsFailed: true };
+        }
+        update();
+        return;
+      }
+
       const bufGeom = bufGeoms[cat];
       const layer = findLayer(webMap.layers, cfg.title);
 
@@ -1948,6 +2027,8 @@ require([
     CONFIG.layers.forEach(cfg => {
       const r = results[cfg.title];
       if (!r) return;
+      if (r.status === "absent") return; // don't show layers that were queried but had no intersecting features
+
       const item = document.createElement("div");
       item.className = `layer-item ${r.status}`;
 
@@ -1998,9 +2079,10 @@ require([
   }
 
   function formatHa(attrs) {
+    // _area_ha is pre-computed for WFS features
+    if (attrs["_area_ha"] != null && !isNaN(attrs["_area_ha"])) return parseFloat(attrs["_area_ha"]).toFixed(2);
     const raw = attrs["Shape__Area"] || attrs["AreaHa"] || attrs["AREA"] || attrs["MEASURE"];
     if (!raw) return null;
-    // Shape__Area is in map units (metres²) — convert to ha; AreaHa already in ha
     const val = attrs["AreaHa"] ? parseFloat(raw) : parseFloat(raw) / 10000;
     return val.toFixed(2);
   }
@@ -2116,17 +2198,19 @@ require([
     const found   = CONFIG.layers.map(l => results[l.title]).filter(r => {
       if (!r) return false;
       if (r.status !== "found") return false;
-      // Exclude Wales layers if site is not in Wales
+      if (!inWales && r.cfg.wfs && r.cfg.shortName.includes("Wales")) return false;
       if (!inWales && r.cfg.wms && r.cfg.shortName.includes("Wales")) return false;
       return true;
     });
     const missing = CONFIG.layers.map(l => results[l.title]).filter(r => {
-      if (!r || r.status !== "missing" || r.cfg.wms) return false;
+      if (!r || r.status !== "missing") return false;
+      if (r.cfg.wms || (r.cfg.wfs && !r.wfsFailed)) return false; // WMS always missing; WFS only if it failed
       return true;
     });
     const wms = CONFIG.layers.map(l => results[l.title]).filter(r => {
-      if (!r || r.status !== "missing" || !r.cfg.wms) return false;
-      // Only include Wales WMS layers in the report if site is in Wales
+      if (!r || r.status !== "missing") return false;
+      // Include WMS layers and failed WFS layers in data limitations
+      if (!r.cfg.wms && !r.wfsFailed) return false;
       if (!inWales && r.cfg.shortName.includes("Wales")) return false;
       return true;
     });
@@ -2160,8 +2244,9 @@ require([
 
         if (seenNames.has(name)) continue;
         seenNames.add(name);
-        const distM = await nearestDistanceM(f.geometry, rlbGeom);
-        const dir   = directionFromRlb(rlbGeom, f.geometry);
+        // WFS features have no ArcGIS geometry — skip distance calculation
+        const distM = f.geometry ? await nearestDistanceM(f.geometry, rlbGeom) : null;
+        const dir   = f.geometry ? directionFromRlb(rlbGeom, f.geometry) : null;
         const ha    = formatHa(f.attributes);
         const imp   = designationImportance(r.cfg.shortName);
         const cite  = citationUrl(f.attributes, r.cfg);
