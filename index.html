@@ -993,7 +993,61 @@ require([
       { title: "C&W In-house Records",
         shortName: "C&W in-house biodiversity records",
         nameField: "Common_Name", latinField: "Latin_Name", type: "records", maxList: 5 },
+
+      // Local Authority Districts — used for planning policy + BAP links
+      { title: "Local Authority Districts (2022)",
+        shortName: "Local Authority District",
+        nameField: "LAD22NM", type: "lad" },
     ],
+
+    // ── Local Authority link lookup ────────────────────────────────────────
+    // Keys are LAD22NM values (case-insensitive match used).
+    // localPlan: URL to the authority's Local Plan page
+    // bap: URL to the relevant LERC or LNP biodiversity action plan
+    ladLinks: {
+      "Bath and North East Somerset": {
+        localPlan: "https://www.bathnes.gov.uk/services/planning-and-building-control/planning-policy/adopted-plans",
+        bap: "https://www.tavo.org.uk/" },
+      "Bristol, City of": {
+        localPlan: "https://www.bristol.gov.uk/planning-and-building-regulations/local-plan",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
+      "North Somerset": {
+        localPlan: "https://www.n-somerset.gov.uk/my-services/planning-and-building-regulations/planning-policy/local-plan",
+        bap: "https://www.tavo.org.uk/" },
+      "Somerset": {
+        localPlan: "https://www.somerset.gov.uk/planning-and-land/planning-policy/local-plan/",
+        bap: "https://www.somersetwildlife.org/" },
+      "South Gloucestershire": {
+        localPlan: "https://www.southglos.gov.uk/planning/planning-policy/local-plan-2020/",
+        bap: "https://www.tavo.org.uk/" },
+      "Wiltshire": {
+        localPlan: "https://www.wiltshire.gov.uk/planning-policy-local-plan",
+        bap: "https://www.wiltshirewildlife.org/" },
+      "Swindon": {
+        localPlan: "https://www.swindon.gov.uk/info/20044/local_plan",
+        bap: "https://www.wiltshirewildlife.org/" },
+      "Dorset": {
+        localPlan: "https://www.dorsetcouncil.gov.uk/planning/planning-policy/local-plan",
+        bap: "https://www.dorsetwildlifetrust.org.uk/" },
+      "Bournemouth, Christchurch and Poole": {
+        localPlan: "https://www.bcpcouncil.gov.uk/planning/planning-policy/local-plan",
+        bap: "https://www.dorsetwildlifetrust.org.uk/" },
+      "Hampshire": {
+        localPlan: "https://www.hants.gov.uk/landplanningandenvironment/strategic-planning/local-plan",
+        bap: "https://www.hiwwt.org.uk/" },
+      "Gloucestershire": {
+        localPlan: "https://www.gloucestershire.gov.uk/planning-and-environment/planning-policy/",
+        bap: "https://www.gloucestershirewildlifetrust.co.uk/" },
+      "Oxfordshire": {
+        localPlan: "https://www.oxfordshire.gov.uk/residents/environment-and-planning/planning/local-plans",
+        bap: "https://www.bbowt.org.uk/" },
+      "Cardiff": {
+        localPlan: "https://www.cardiff.gov.uk/ENG/resident/Planning/Planning-policy/Local-Development-Plan/Pages/Local-Development-Plan.aspx",
+        bap: "https://www.visitwales.com/" },
+      "Vale of Glamorgan": {
+        localPlan: "https://www.valeofglamorgan.gov.uk/en/our_services/planning/planning_policy/local_development_plan.aspx",
+        bap: "https://www.glamorganwildlife.org/" },
+    },
   };
   // ══════════════════════════════════════════════════════════════════════════
 
@@ -1516,6 +1570,7 @@ require([
   function defaultCategory(cfg) {
     if (cfg.type === "records") return "records";
     if (cfg.type === "bat") return "national";
+    if (cfg.type === "lad") return "national"; // uses centroid anyway, not buffer
     if (cfg.type === "river" || cfg.type === "habitat") return "national";
     if (cfg.type === "statutory") {
       const imp = designationImportance(cfg.shortName);
@@ -1592,7 +1647,8 @@ require([
 
     CONFIG.layers.forEach(cfg => {
       if (cfg.wms) return; // WMS layers not queryable — skip
-      if (cfg.wfs) { layerAssignments[cfg.title] = defaultCategory(cfg); } // WFS layers are queryable
+      if (cfg.type === "lad") return; // LAD layer doesn't need a buffer distance chip
+      if (cfg.wfs) { layerAssignments[cfg.title] = defaultCategory(cfg); }
       const cat = layerAssignments[cfg.title] || defaultCategory(cfg);
       const container = document.querySelector(`.buf-layers[data-key="${cat}"]`);
       if (!container) return;
@@ -1815,10 +1871,29 @@ require([
             console.log(`WFS "${cfg.title}" — no name field matched. Available props:`, Object.keys(props).join(", "));
             return Object.values(props).find(v => typeof v === "string" && v.trim().length > 2) || "Unnamed";
           };
-          const getArea = (props) => {
-            if (cfg.wfsAreaField && props[cfg.wfsAreaField]) return parseFloat(props[cfg.wfsAreaField]);
-            for (const f of ["cartesian_area_ha","area_ha","area","Shape__Area"]) {
-              if (props[f] != null) return parseFloat(props[f]);
+          const getArea = (props, geojsonGeom) => {
+            if (cfg.wfsAreaField && props[cfg.wfsAreaField] != null) return parseFloat(props[cfg.wfsAreaField]);
+            // Try all common NRW area field names
+            for (const f of ["cartesian_area_ha","area_ha","spherical_area_ha","ha","area","AREA","Shape__Area","shape_area","shape__area"]) {
+              if (props[f] != null && !isNaN(parseFloat(props[f]))) {
+                const v = parseFloat(props[f]);
+                // If value looks like m² (very large), convert to ha
+                return v > 10000 ? v / 10000 : v;
+              }
+            }
+            // Last resort: compute approximate area from GeoJSON polygon geometry
+            if (geojsonGeom && geojsonGeom.type === "Polygon" && geojsonGeom.coordinates) {
+              // Shoelace formula on first ring (degrees) — rough estimate only
+              const ring = geojsonGeom.coordinates[0];
+              if (ring && ring.length > 2) {
+                let area = 0;
+                for (let i = 0; i < ring.length - 1; i++) {
+                  area += ring[i][0] * ring[i+1][1] - ring[i+1][0] * ring[i][1];
+                }
+                // Convert degrees² to m² (approx at 52°N) then to ha
+                const m2 = Math.abs(area) / 2 * 111320 * 111320 * Math.cos(52 * Math.PI / 180);
+                return m2 / 10000;
+              }
             }
             return null;
           };
@@ -1839,7 +1914,7 @@ require([
             features.forEach(f => {
               const type = getName(f.properties || {});
               if (!type || type === "Unnamed") return;
-              const ha = getArea(f.properties || {});
+              const ha = getArea(f.properties || {}, f.geometry);
               countByType[type] = (countByType[type] || 0) + 1;
               areaByType[type] = (areaByType[type] || 0) + (isNaN(ha) || ha == null ? 0 : ha);
             });
@@ -1856,7 +1931,7 @@ require([
             _countByType: countByType,
             features: features.map(f => ({
               geometry: null,
-              attributes: { ...f.properties, _area_ha: getArea(f.properties || {}) },
+              attributes: { ...f.properties, _area_ha: getArea(f.properties || {}, f.geometry) },
             })),
             bufKm: buffers[cat],
             cfg,
@@ -1894,7 +1969,33 @@ require([
       try {
         const PAGE = 500;
 
-        if (cfg.type === "bat") {
+        if (cfg.type === "lad") {
+          // Query using the RLB centroid to find which local authority the site is in
+          const centroid = selectedGeom.centroid || selectedGeom.extent
+            ? { x: (selectedGeom.extent.xmin + selectedGeom.extent.xmax) / 2,
+                y: (selectedGeom.extent.ymin + selectedGeom.extent.ymax) / 2,
+                spatialReference: selectedGeom.spatialReference }
+            : selectedGeom;
+          const ladQ = new Query({
+            geometry: centroid,
+            spatialRelationship: "intersects",
+            outFields: ["LAD22NM", "LAD22CD"],
+            returnGeometry: false,
+            num: 5,
+          });
+          const ladFs = await queryREST.executeQueryJSON(url, ladQ);
+          const ladFeatures = ladFs.features || [];
+          const ladNames = [...new Set(ladFeatures.map(f => f.attributes["LAD22NM"]).filter(Boolean))];
+          results[cfg.title] = {
+            status: ladNames.length > 0 ? "found" : "absent",
+            count: ladNames.length,
+            names: ladNames,
+            features: ladFeatures.map(f => ({ geometry: null, attributes: f.attributes })),
+            bufKm: buffers[cat],
+            cfg,
+          };
+
+        } else if (cfg.type === "bat") {
           // Bat zones: query against the RLB itself (not the buffer)
           const batQ = new Query({
             geometry: selectedGeom,
@@ -2051,7 +2152,8 @@ require([
     CONFIG.layers.forEach(cfg => {
       const r = results[cfg.title];
       if (!r) return;
-      if (r.status === "absent") return; // don't show layers that were queried but had no intersecting features
+      if (r.status === "absent") return;
+      if (r.cfg.type === "lad") return; // LAD is infrastructure, not a designation layer
 
       const item = document.createElement("div");
       item.className = `layer-item ${r.status}`;
@@ -2222,18 +2324,20 @@ require([
     const found   = CONFIG.layers.map(l => results[l.title]).filter(r => {
       if (!r) return false;
       if (r.status !== "found") return false;
+      if (r.cfg.type === "lad") return false;
       if (!inWales && r.cfg.wfs && r.cfg.shortName.includes("Wales")) return false;
       if (!inWales && r.cfg.wms && r.cfg.shortName.includes("Wales")) return false;
       return true;
     });
     const missing = CONFIG.layers.map(l => results[l.title]).filter(r => {
       if (!r || r.status !== "missing") return false;
-      if (r.cfg.wms || (r.cfg.wfs && !r.wfsFailed)) return false; // WMS always missing; WFS only if it failed
+      if (r.cfg.type === "lad") return false;
+      if (r.cfg.wms || (r.cfg.wfs && !r.wfsFailed)) return false;
       return true;
     });
     const wms = CONFIG.layers.map(l => results[l.title]).filter(r => {
       if (!r || r.status !== "missing") return false;
-      // Include WMS layers and failed WFS layers in data limitations
+      if (r.cfg.type === "lad") return false;
       if (!r.cfg.wms && !r.wfsFailed) return false;
       if (!inWales && r.cfg.shortName.includes("Wales")) return false;
       return true;
@@ -2476,12 +2580,44 @@ require([
     }
 
     // ══ PLACEHOLDER SECTIONS ════════════════════════════════════════════════
+
+    // Get local authority name(s) from LAD query
+    const ladResult = results["Local Authority Districts (2022)"];
+    const ladNames = ladResult?.names || [];
+
+    function getLadLinks(laName) {
+      // Case-insensitive lookup
+      const key = Object.keys(CONFIG.ladLinks || {}).find(k => k.toLowerCase() === laName.toLowerCase());
+      return key ? CONFIG.ladLinks[key] : null;
+    }
+
+    function laSearchUrl(laName, topic) {
+      return `https://www.google.com/search?q=${encodeURIComponent(laName + " " + topic)}`;
+    }
+
+    // Local BAP
     html += `<h2>Local BAP</h2>`;
-    html += P(`${ph("Insert relevant Local Biodiversity Action Plan habitats and species.")}`);
+    if (ladNames.length > 0) {
+      ladNames.forEach(la => {
+        const links = getLadLinks(la);
+        const bapUrl = links?.bap || laSearchUrl(la, "Local Biodiversity Action Plan");
+        html += P(`The <a class="citation-link" href="${bapUrl}" target="_blank">${la} Local Biodiversity Action Plan ↗</a> should be consulted for relevant priority habitats and species.`);
+      });
+    } else {
+      html += P(`${ph("Insert relevant Local Biodiversity Action Plan habitats and species.")}`);
+    }
 
+    // Planning Policy
     html += `<h2>Planning Policy</h2>`;
-    html += P(`${ph("Insert relevant local planning policies identified from the Local Development Framework and Local Plan.")}`);
-
+    if (ladNames.length > 0) {
+      ladNames.forEach(la => {
+        const links = getLadLinks(la);
+        const planUrl = links?.localPlan || laSearchUrl(la, "Local Plan planning policy");
+        html += P(`The <a class="citation-link" href="${planUrl}" target="_blank">${la} Local Plan ↗</a> should be consulted for relevant planning policies relating to designated sites, protected species and habitats, and general ecological and environmental protection.`);
+      });
+    } else {
+      html += P(`${ph("Insert relevant local planning policies identified from the Local Development Framework and Local Plan.")}`);
+    }
     // ══ DATA LIMITATIONS ════════════════════════════════════════════════════
     if (wms.length || missing.length) {
       html += `<h2>Data Limitations</h2>`;
@@ -2710,14 +2846,43 @@ require([
         } else if (tag === "p") {
           const ns = node.querySelector(".para-num");
           const ph = node.querySelector(".placeholder");
-          const bodyText = node.innerText.replace(ns?.innerText||"","").trim();
           const textCol = ph ? "8A6200" : FONT_COLOR;
 
           if (ns) {
-            // Number + TAB + text — hanging indent keeps wrapped lines aligned
-            body += `<w:p>${numberedPPr()}<w:r>${rpr(SZ9,true,FONT_COLOR)}<w:t>${esc(ns.innerText)}</w:t></w:r><w:r><w:rPr><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr><w:tab/></w:r><w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(bodyText)}</w:t></w:r></w:p>`;
+            // Number + TAB + body (walk children for inline links)
+            let bodyRuns = "";
+            node.childNodes.forEach(n => {
+              if (n === ns || (ns && n.contains && n.contains(ns))) return;
+              if (n.nodeType === 3) {
+                const t = n.textContent;
+                if (t) bodyRuns += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              } else if (n.nodeType === 1 && n.tagName === "A") {
+                const href = n.getAttribute("href");
+                if (href) bodyRuns += hlRun(n.innerText.trim(), href, SZ9);
+                else bodyRuns += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(n.innerText)}</w:t></w:r>`;
+              } else if (n.nodeType === 1) {
+                const t = n.innerText?.trim();
+                if (t) bodyRuns += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              }
+            });
+            body += `<w:p>${numberedPPr()}<w:r>${rpr(SZ9,true,FONT_COLOR)}<w:t>${esc(ns.innerText)}</w:t></w:r><w:r><w:rPr><w:sz w:val="${SZ9}"/><w:szCs w:val="${SZ9}"/><w:rFonts w:ascii="${FONT}" w:hAnsi="${FONT}" w:cs="${FONT}"/></w:rPr><w:tab/></w:r>${bodyRuns || `<w:r>${rpr(SZ9,false,textCol)}<w:t/></w:r>`}</w:p>`;
           } else {
-            body += `<w:p>${indentPPr()}<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(bodyText)}</w:t></w:r></w:p>`;
+            // Un-numbered paragraph — walk for inline links too
+            let runs = "";
+            node.childNodes.forEach(n => {
+              if (n.nodeType === 3) {
+                const t = n.textContent;
+                if (t) runs += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              } else if (n.nodeType === 1 && n.tagName === "A") {
+                const href = n.getAttribute("href");
+                if (href) runs += hlRun(n.innerText.trim(), href, SZ9);
+                else runs += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(n.innerText)}</w:t></w:r>`;
+              } else if (n.nodeType === 1) {
+                const t = n.innerText?.trim();
+                if (t) runs += `<w:r>${rpr(SZ9,false,textCol)}<w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+              }
+            });
+            body += `<w:p>${indentPPr()}${runs || `<w:r>${rpr(SZ9,false,textCol)}<w:t/></w:r>`}</w:p>`;
           }
 
         } else if (tag === "ul") {
