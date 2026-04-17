@@ -938,9 +938,10 @@ require([
 
       { title: "Priority Habitats - High sensitivity (Wales)",
         shortName: "Priority Habitats of high sensitivity (Wales)",
-        nameField: "name", type: "habitat", wfs: true,
+        nameField: "habitat", type: "habitat", wfs: true,
         wfsType: "geonode:gwc21_priority_habitat_high_sensitivity",
-        wfsNameFields: ["habitat","habitat_type","main_habitat","name","NAME"] },
+        wfsNameFields: ["habitat","habitat_type","main_habitat","hab_type","phase1","description","name","NAME"],
+        groupByField: true },
 
       // ── River habitats ────────────────────────────────────────────────────
       { title: "Priority River Habitat - Rivers (England)",
@@ -1811,25 +1812,48 @@ require([
             for (const f of cfg.wfsNameFields || []) {
               if (props[f]) return String(props[f]).trim();
             }
-            // Log available fields to help diagnose mismatches
             console.log(`WFS "${cfg.title}" — no name field matched. Available props:`, Object.keys(props).join(", "));
             return Object.values(props).find(v => typeof v === "string" && v.trim().length > 2) || "Unnamed";
           };
           const getArea = (props) => {
-            if (cfg.wfsAreaField && props[cfg.wfsAreaField]) {
-              return parseFloat(props[cfg.wfsAreaField]);
-            }
-            // Common area field names
+            if (cfg.wfsAreaField && props[cfg.wfsAreaField]) return parseFloat(props[cfg.wfsAreaField]);
             for (const f of ["cartesian_area_ha","area_ha","area","Shape__Area"]) {
-              if (props[f]) return parseFloat(props[f]);
+              if (props[f] != null) return parseFloat(props[f]);
             }
             return null;
           };
-          const names = [...new Set(features.map(f => getName(f.properties || {})).filter(n => n && n !== "Unnamed"))];
+
+          // For groupByField layers sum area per habitat type (like English PHI)
+          let names, areaByType = null, countByType = null;
+          if (cfg.groupByField) {
+            areaByType = {};
+            countByType = {};
+            if (features.length > 0) {
+              const sampleProps = features[0].properties || {};
+              const propKeys = Object.keys(sampleProps).join(", ");
+              console.log(`WFS groupByField "${cfg.title}" — props: ${propKeys}`);
+              console.log(`WFS groupByField "${cfg.title}" — sample:`, JSON.stringify(sampleProps).slice(0, 300));
+              // Show in status bar for mobile debugging
+              setJnccStatus(`ℹ PHI Wales fields: ${propKeys.slice(0,100)}`, "loading");
+            }
+            features.forEach(f => {
+              const type = getName(f.properties || {});
+              if (!type || type === "Unnamed") return;
+              const ha = getArea(f.properties || {});
+              countByType[type] = (countByType[type] || 0) + 1;
+              areaByType[type] = (areaByType[type] || 0) + (isNaN(ha) || ha == null ? 0 : ha);
+            });
+            names = Object.keys(areaByType);
+          } else {
+            names = [...new Set(features.map(f => getName(f.properties || {})).filter(n => n && n !== "Unnamed"))];
+          }
+
           results[cfg.title] = {
             status: features.length > 0 ? "found" : "absent",
             count: features.length,
             names,
+            _areaByType: areaByType,
+            _countByType: countByType,
             features: features.map(f => ({
               geometry: null,
               attributes: { ...f.properties, _area_ha: getArea(f.properties || {}) },
@@ -2321,15 +2345,18 @@ require([
         const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
 
         if (r.cfg.groupByField) {
-          // PHI — show total area per habitat type
           const areaByType = r._areaByType || {};
+          const countByType = r._countByType || {};
           const types = Object.entries(areaByType).sort((a,b) => b[1] - a[1]);
           const totalHa = Object.values(areaByType).reduce((s,v) => s+v, 0);
           const countLabel = r.count >= 2000 ? `at least ${r.count.toLocaleString()}` : r.count.toLocaleString();
-          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${rBuf(r)} buffer (total area approximately ${totalHa.toFixed(2)} ha), comprising the following habitat types:`);
-          html += `<ul>` + types.map(([type, ha]) =>
-            `<li><strong>${type}</strong> — ${ha.toFixed(2)} ha</li>`
-          ).join("") + `</ul>`;
+          const hasArea = totalHa > 0;
+          html += P(`${countLabel} parcel${r.count !== 1 ? "s" : ""} of ${r.cfg.shortName} ${r.count !== 1 ? "were" : "was"} identified within the ${rBuf(r)} buffer${hasArea ? ` (total area approximately ${totalHa.toFixed(2)} ha)` : ""}, comprising the following habitat types:`);
+          html += `<ul>` + types.map(([type, ha]) => {
+            const count = countByType[type] || 0;
+            const detail = hasArea ? `${ha.toFixed(2)} ha` : `${count} parcel${count !== 1 ? "s" : ""}`;
+            return `<li><strong>${type}</strong> — ${detail}</li>`;
+          }).join("") + `</ul>`;
         } else {
           const habRows = [];
           for (const f of r.features) {
