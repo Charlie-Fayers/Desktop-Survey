@@ -294,6 +294,24 @@
       0%,100% { box-shadow: 0 0 0 0 rgba(82,183,136,.3); }
       50%      { box-shadow: 0 0 0 5px rgba(82,183,136,0); }
     }
+    .btn-draw {
+      background: var(--surface);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .btn-draw .step-num { background: #fef3cd; color: var(--amber-dark); }
+    .btn-draw:hover:not(:disabled) { border-color: var(--amber-dark); }
+    .btn-draw.drawing {
+      background: #fffbea;
+      border-color: var(--amber-dark);
+      color: var(--amber-dark);
+      animation: pulse-amber 1.4s ease-in-out infinite;
+    }
+    .btn-draw.selected { border-color: var(--amber-dark); background: #fffbea; color: var(--amber-dark); }
+    @keyframes pulse-amber {
+      0%,100% { box-shadow: 0 0 0 0 rgba(233,196,106,.4); }
+      50%      { box-shadow: 0 0 0 5px rgba(233,196,106,0); }
+    }
     .btn-run {
       background: var(--green-mid);
       color: #fff;
@@ -694,6 +712,11 @@
         <span id="btnSelectLabel">Select red line boundary</span>
       </button>
 
+      <button class="step-btn btn-draw" id="btnDraw" onclick="startDraw()">
+        <span class="step-num">1</span>
+        <span id="btnDrawLabel">Draw red line boundary</span>
+      </button>
+
       <button class="step-btn btn-run" id="btnRun" disabled onclick="runAnalysis()">
         <span class="step-num">2</span>
         <span id="btnRunLabel">Run Desk Study</span>
@@ -781,11 +804,14 @@ require([
   "esri/rest/support/Query",
   "esri/identity/OAuthInfo",
   "esri/identity/IdentityManager",
+  "esri/layers/GraphicsLayer",
+  "esri/widgets/Sketch/SketchViewModel",
 ], function(
   Map, MapView, WebMap,
   geometryEngineAsync,
   Graphic, queryREST, Query,
-  OAuthInfo, IdentityManager
+  OAuthInfo, IdentityManager,
+  GraphicsLayer, SketchViewModel
 ) {
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1398,6 +1424,62 @@ require([
   let selectedGeom  = null;
   let bufferGraphic = null;
 
+  // ── Draw layer + SketchViewModel ─────────────────────────────────────────
+  const drawLayer = new GraphicsLayer({ listMode: "hide" });
+  view.map.add(drawLayer);
+  let sketchVM = null;
+
+  function getSketchVM() {
+    if (!sketchVM) {
+      sketchVM = new SketchViewModel({
+        view,
+        layer: drawLayer,
+        polygonSymbol: {
+          type: "simple-fill",
+          color: [220, 30, 30, 0.1],
+          outline: { color: [220, 30, 30, 1], width: 2 },
+        },
+        updateOnGraphicClick: false,
+      });
+      sketchVM.on("create", e => {
+        if (e.state === "complete") {
+          const geom = e.graphic.geometry;
+          selectedGeom = geom;
+          document.getElementById("btnDraw").classList.remove("drawing");
+          document.getElementById("btnDraw").classList.add("selected");
+          document.getElementById("btnDrawLabel").textContent = "✓ Boundary drawn";
+          document.getElementById("btnSelect").classList.remove("selected", "selecting");
+          document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
+          document.getElementById("btnRun").disabled = false;
+          setStatus("info", "✓ Boundary drawn — ready to run desk study.");
+          view.cursor = "default";
+        }
+      });
+    }
+    return sketchVM;
+  }
+
+  window.startDraw = function() {
+    // Cancel any active click-selection
+    if (clickHandler) { clickHandler.remove(); clickHandler = null; }
+    document.getElementById("btnSelect").classList.remove("selecting", "selected");
+    document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
+    document.getElementById("selectOverlay").classList.remove("active");
+
+    // Clear any existing drawn geometry
+    drawLayer.removeAll();
+    selectedGeom = null;
+    document.getElementById("btnRun").disabled = true;
+
+    document.getElementById("btnDraw").classList.add("drawing");
+    document.getElementById("btnDraw").classList.remove("selected");
+    document.getElementById("btnDrawLabel").textContent = "Drawing… (click to place points, double-click to finish)";
+    setStatus("info", "Click to place polygon vertices. Double-click to complete the boundary.");
+    view.cursor = "crosshair";
+
+    getSketchVM().create("polygon", { mode: "click" });
+  };
+
   // ── Buffer group state ────────────────────────────────────────────────────
   // layerAssignments maps cfg.title → category key
   const layerAssignments = {};
@@ -1520,6 +1602,11 @@ require([
   // ── Selection ─────────────────────────────────────────────────────────────
   window.startSelection = function() {
     resetState(false);
+    // Cancel any in-progress draw
+    if (sketchVM) { try { sketchVM.cancel(); } catch(e) {} }
+    drawLayer.removeAll();
+    document.getElementById("btnDraw").classList.remove("drawing", "selected");
+    document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
     setStatus("selecting");
     document.getElementById("btnSelect").classList.add("selecting");
     document.getElementById("btnSelectLabel").textContent = "Click boundary on map…";
@@ -2697,8 +2784,10 @@ require([
 
   function resetState(full) {
     if (clickHandler) { clickHandler.remove(); clickHandler = null; }
+    if (sketchVM) { try { sketchVM.cancel(); } catch(e) {} }
     if (full) {
       selectedGeom = null;
+      drawLayer.removeAll();
       if (bufferGraphic) {
         (Array.isArray(bufferGraphic) ? bufferGraphic : [bufferGraphic])
           .forEach(g => { try { view.graphics.remove(g); } catch(e) {} });
@@ -2706,6 +2795,8 @@ require([
       }
       document.getElementById("btnSelect").classList.remove("selecting", "selected");
       document.getElementById("btnSelectLabel").textContent = "Select red line boundary";
+      document.getElementById("btnDraw").classList.remove("drawing", "selected");
+      document.getElementById("btnDrawLabel").textContent = "Draw red line boundary";
       document.getElementById("btnRun").disabled = true;
       document.getElementById("btnRunLabel").textContent = "Run Desk Study";
       document.getElementById("layerResults").style.display = "none";
