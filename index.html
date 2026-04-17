@@ -1741,15 +1741,22 @@ require([
     // ── Query all layers in parallel ─────────────────────────────────────────
     // Recursively find a layer by title through group layers
     function findLayer(layers, title) {
+      const titleLower = title.toLowerCase();
+      let partialMatch = null;
       for (let i = 0; i < layers.length; i++) {
         const l = layers.getItemAt(i);
+        // Exact match first
         if (l.title === title) return l;
+        // Case-insensitive exact match
+        if (l.title?.toLowerCase() === titleLower) return l;
+        // Partial match fallback — store first hit, keep looking for better
+        if (!partialMatch && l.title?.toLowerCase().includes(titleLower)) partialMatch = l;
         if (l.type === "group" && l.layers) {
           const found = findLayer(l.layers, title);
           if (found) return found;
         }
       }
-      return null;
+      return partialMatch || null;
     }
 
     const total = CONFIG.layers.length;
@@ -1786,19 +1793,27 @@ require([
 
         if (cfg.type === "bat") {
           // Bat zones: query against the RLB itself (not the buffer)
-          // to determine if the site boundary falls within the zone
           const batQ = new Query({
             geometry: selectedGeom,
             spatialRelationship: "intersects",
-            outFields: cfg.bandField ? [cfg.bandField] : ["*"],
+            outFields: ["*"], // fetch all fields so we can try multiple band field names
             returnGeometry: false,
             num: 10,
           });
           const batFs = await queryREST.executeQueryJSON(url, batQ);
           const batFeatures = batFs.features || [];
-          // Collect unique band values
+          // Try several possible field name spellings for the consultation band
+          const BAND_FIELDS = ["Consutatio_Band", "Consultation_Band", "ConsultationBand", "Band", "BAND"];
           const bands = [...new Set(
-            batFeatures.map(f => cfg.bandField ? f.attributes[cfg.bandField] : null).filter(Boolean)
+            batFeatures.map(f => {
+              for (const field of BAND_FIELDS) {
+                const v = f.attributes[field];
+                if (v) return String(v).trim();
+              }
+              // Last resort: find any attribute with "band" in the key
+              const bandKey = Object.keys(f.attributes).find(k => /band/i.test(k));
+              return bandKey ? String(f.attributes[bandKey]).trim() : null;
+            }).filter(Boolean)
           )];
           results[cfg.title] = {
             status: batFeatures.length > 0 ? "found" : "absent",
@@ -2004,58 +2019,63 @@ require([
   }
 
   function citationUrl(attrs, cfg) {
-    // Each designation type has a different code field and URL pattern
     const shortName = (cfg?.shortName || "").toLowerCase();
+    const BASE = "https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=";
 
-    // SSSI — REF_CODE → SiteCitation.aspx
+    // HYPERLINK field contains numeric code only e.g. "1003970" — prepend "S"
+    const hyperlink = () => {
+      const h = String(attrs["HYPERLINK"] || "").trim();
+      if (!h) return null;
+      if (h.startsWith("http")) return h;
+      return `${BASE}S${h.replace(/^S/i, "")}`;
+    };
+
+    // SSSI — HYPERLINK field has the correct numeric code
     if (shortName.includes("sssi") || shortName.includes("special scientific")) {
-      const code = attrs["REF_CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteCitation.aspx?SiteCode=S${code}`;
+      return hyperlink();
     }
 
-    // SAC — SAC_CODE → SiteDetail
+    // SAC — SAC_CODE
     if (shortName.includes("sac") || shortName.includes("special area")) {
       const code = attrs["SAC_CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+      return code ? `${BASE}${code}` : null;
     }
 
-    // SPA — SPA_CODE → SiteDetail
+    // SPA — SPA_CODE
     if (shortName.includes("spa") || shortName.includes("special protection")) {
       const code = attrs["SPA_CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+      return code ? `${BASE}${code}` : null;
     }
 
-    // Ramsar — CODE → SiteDetail
+    // Ramsar — CODE
     if (shortName.includes("ramsar")) {
       const code = attrs["CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+      return code ? `${BASE}${code}` : null;
     }
 
-    // NNR — REF_CODE → SiteCitation (same pattern as SSSI)
+    // NNR — HYPERLINK field has the correct numeric code (same pattern as SSSI)
     if (shortName.includes("nnr") || shortName.includes("national nature")) {
-      const code = attrs["REF_CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteCitation.aspx?SiteCode=S${code}`;
-      if (attrs["HYPERLINK"] && attrs["HYPERLINK"].startsWith("http")) return attrs["HYPERLINK"];
+      return hyperlink();
     }
 
-    // LNR — REF_CODE → SiteDetail
+    // LNR — REF_CODE
     if (shortName.includes("lnr") || shortName.includes("local nature")) {
       const code = attrs["REF_CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=S${code}`;
+      return code ? `${BASE}S${code}` : null;
     }
 
-    // AONB — HOTLINK field, or CODE
+    // AONB — HOTLINK field
     if (shortName.includes("aonb") || shortName.includes("outstanding natural beauty")) {
       if (attrs["HOTLINK"]) return attrs["HOTLINK"];
       const code = attrs["CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+      return code ? `${BASE}${code}` : null;
     }
 
-    // National Park — HOTLINK field, or CODE
+    // National Park — HOTLINK field
     if (shortName.includes("national park")) {
       if (attrs["HOTLINK"]) return attrs["HOTLINK"];
       const code = attrs["CODE"];
-      if (code) return `https://designatedsites.naturalengland.org.uk/SiteDetail.aspx?SiteCode=${code}`;
+      return code ? `${BASE}${code}` : null;
     }
 
     return null;
