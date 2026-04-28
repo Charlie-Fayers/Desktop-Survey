@@ -186,7 +186,6 @@ Edit the preset buttons in the HTML:
 - **Feature counts** are paginated up to 2,000 features per layer. Where this cap is reached, the true count is retrieved via a separate `returnCountOnly` query and reported as "at least N".
 - **Reason for Designation** cannot be retrieved automatically (no public API from Natural England). Each statutory designation in Table 1 links to its NE citation page for manual lookup.
 
-git commit --allow-empty -m "trigger deploy" && git push
 
 ---
 
