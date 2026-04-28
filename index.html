@@ -3181,6 +3181,7 @@ require([
     const status = document.getElementById("pmStatus");
     btn.disabled = true;
     btn.textContent = "Exporting…";
+    status.innerHTML = "";
     status.style.display = "block";
     status.style.color = "#1a5da0";
     status.textContent = "⏳ Sending to print service…";
@@ -3197,46 +3198,49 @@ require([
       copyrightText: `© Crown copyright and database rights ${new Date().getFullYear()} Ordnance Survey`,
       scalebarUnit: "Meters",
     };
-    if (project) {
-      layoutOptions.customTextElements = [{ "Project": project }];
-    }
+    if (project) layoutOptions.customTextElements = [{ "Project": project }];
 
     const exportOptions = { dpi: 200 };
-    if (scale) {
-      exportOptions.outputType = "MAP_ONLY";
-    }
 
+    let result;
     try {
       const template = new PrintTemplate({
-        format: format,
-        layout: layout,
-        layoutOptions: layoutOptions,
-        exportOptions: exportOptions,
+        format,
+        layout,
+        layoutOptions,
+        exportOptions,
         outScale: scale ? parseInt(scale) : undefined,
         preserveScale: !!scale,
       });
-
       const params = new PrintParameters({ view, template });
-      status.textContent = "⏳ Generating map image (this may take 15–30 seconds)…";
-      const result = await printREST.execute(PRINT_URL, params);
-
-      status.style.color = "#1a3d2b";
-      status.textContent = "✓ Map exported — opening download link…";
-
-      // Open in new tab — cross-origin URLs can't be force-downloaded via click()
-      window.open(result.url, "_blank");
-
-      setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = "Export";
-        document.getElementById("printModal").style.display = "none";
-      }, 2000);
-    } catch(e) {
+      status.textContent = "⏳ Generating map (may take up to 30 seconds)…";
+      console.log("Executing print:", PRINT_URL, { format, layout });
+      result = await printREST.execute(PRINT_URL, params);
+      console.log("Print result:", result);
+    } catch(err) {
+      console.error("Print error:", err);
       status.style.color = "#c00";
-      status.textContent = `✗ Export failed: ${e.message || "Unknown error"}`;
+      status.textContent = `✗ Print service error: ${err?.message || JSON.stringify(err)}`;
       btn.disabled = false;
       btn.textContent = "Export";
+      return;
     }
+
+    if (!result?.url) {
+      status.style.color = "#c00";
+      status.textContent = "✗ Print service returned no URL. Try a different format or layout.";
+      btn.disabled = false;
+      btn.textContent = "Export";
+      return;
+    }
+
+    // Success — show clickable link (window.open may be blocked by popup blocker)
+    status.style.color = "#1a3d2b";
+    status.innerHTML = `✓ Map ready — <a href="${result.url}" target="_blank" style="color:#1a3d2b;font-weight:bold;">click here to open / download ↗</a>`;
+    // Also try window.open
+    window.open(result.url, "_blank");
+    btn.disabled = false;
+    btn.textContent = "Export Again";
   };
 
 }); // end require
