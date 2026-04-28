@@ -2419,7 +2419,7 @@ require([
       html += P(`${statRows.length} statutory designated site${statRows.length !== 1 ? "s" : ""} for nature conservation ${statRows.length !== 1 ? "were" : "was"} identified during the desk study (${parts.join("; ")}) and ${statRows.length !== 1 ? "are" : "is"} summarised in Table 1 below.`);
       html += `<p><strong>Table 1: Summary of Statutory Designated Sites for Nature Conservation</strong></p>
       <table><thead><tr><th>Site Name</th><th>Size, Distance and Direction from Site</th><th>Reason for Designation</th><th>Importance</th></tr></thead><tbody>`;
-      for (const row of statRows) {
+      for (const row of statRows.filter(r => r.imp !== "Local")) {
         const sizeStr = row.ha ? `${row.ha} hectares<br>` : "";
         const distText = locStr(row.distM, row.dir);
         // Ensure "approx." prefix and capitalise first letter
@@ -3220,14 +3220,11 @@ require([
       status.textContent = "⏳ Generating map image (this may take 15–30 seconds)…";
       const result = await printREST.execute(PRINT_URL, params);
 
-      // Auto-download
       status.style.color = "#1a3d2b";
-      status.textContent = "✓ Map exported — downloading…";
-      const a = document.createElement("a");
-      a.href = result.url;
-      a.download = `${title.replace(/[^a-z0-9]/gi, "_")}.${format === "png32" ? "png" : format}`;
-      a.target = "_blank";
-      a.click();
+      status.textContent = "✓ Map exported — opening download link…";
+
+      // Open in new tab — cross-origin URLs can't be force-downloaded via click()
+      window.open(result.url, "_blank");
 
       setTimeout(() => {
         btn.disabled = false;
