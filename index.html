@@ -1071,7 +1071,7 @@ require([
     container: "viewDiv",
     map: webMap,
     ui: { components: ["zoom", "compass", "attribution"] },
-    popup: { autoOpenEnabled: false },  // suppress all popups
+    popup: { dockEnabled: false },  // allow popups on map click; suppressed programmatically during RLB search
   });
 
   // Once the map loads, build the layer panel and load Word export library
@@ -1694,8 +1694,9 @@ require([
 
     if (clickHandler) clickHandler.remove();
     clickHandler = view.on("click", async event => {
-      // Suppress default popup
+      // Suppress default popup during selection mode
       event.stopPropagation();
+      view.popup.close();
 
       // Find red line layers recursively through groups
       const redLayers = [];
@@ -3045,6 +3046,7 @@ require([
 
     if (result.geometry) {
       // RLB feature — zoom and auto-select as the active boundary
+      view.popup.close(); // suppress popup during programmatic selection
       view.goTo({ target: result.geometry, zoom: 15 });
 
       // Auto-select: set as selectedGeom and update UI as if user clicked it
