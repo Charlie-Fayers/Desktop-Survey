@@ -1006,47 +1006,47 @@ require([
     // bap: URL to the relevant LERC or LNP biodiversity action plan
     ladLinks: {
       "Bath and North East Somerset": {
-        localPlan: "https://www.bathnes.gov.uk/services/planning-and-building-control/planning-policy/adopted-plans",
-        bap: "https://www.tavo.org.uk/" },
+        localPlan: "https://www.bathnes.gov.uk/local-plan",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
       "Bristol, City of": {
-        localPlan: "https://www.bristol.gov.uk/planning-and-building-regulations/local-plan",
+        localPlan: "https://www.bristol.gov.uk/residents/planning-and-building-regulations/planning-policy-and-guidance/local-plan",
         bap: "https://www.avonwildlifetrust.org.uk/" },
       "North Somerset": {
-        localPlan: "https://www.n-somerset.gov.uk/my-services/planning-and-building-regulations/planning-policy/local-plan",
-        bap: "https://www.tavo.org.uk/" },
+        localPlan: "https://n-somerset.gov.uk/my-services/planning-building-control/planning-policy/our-local-plan",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
       "Somerset": {
-        localPlan: "https://www.somerset.gov.uk/planning-and-land/planning-policy/local-plan/",
-        bap: "https://www.somersetwildlife.org/" },
+        localPlan: "https://www.somerset.gov.uk/planning-buildings-and-land/somerset-local-plan/",
+        bap: "https://www.somersetwildlife.org/nature-recovery" },
       "South Gloucestershire": {
-        localPlan: "https://www.southglos.gov.uk/planning/planning-policy/local-plan-2020/",
-        bap: "https://www.tavo.org.uk/" },
+        localPlan: "https://beta.southglos.gov.uk/new-local-plan/",
+        bap: "https://www.avonwildlifetrust.org.uk/" },
       "Wiltshire": {
-        localPlan: "https://www.wiltshire.gov.uk/planning-policy-local-plan",
-        bap: "https://www.wiltshirewildlife.org/" },
+        localPlan: "https://www.wiltshire.gov.uk/planning-policy",
+        bap: "https://www.wiltshirewildlife.org/nature-recovery-network" },
       "Swindon": {
         localPlan: "https://www.swindon.gov.uk/info/20044/local_plan",
-        bap: "https://www.wiltshirewildlife.org/" },
+        bap: "https://www.wiltshirewildlife.org/nature-recovery-network" },
       "Dorset": {
-        localPlan: "https://www.dorsetcouncil.gov.uk/planning/planning-policy/local-plan",
-        bap: "https://www.dorsetwildlifetrust.org.uk/" },
+        localPlan: "https://www.dorsetcouncil.gov.uk/planning-buildings-land/planning-policy",
+        bap: "https://www.dorsetwildlifetrust.org.uk/nature-recovery" },
       "Bournemouth, Christchurch and Poole": {
         localPlan: "https://www.bcpcouncil.gov.uk/planning/planning-policy/local-plan",
-        bap: "https://www.dorsetwildlifetrust.org.uk/" },
+        bap: "https://www.dorsetwildlifetrust.org.uk/nature-recovery" },
       "Hampshire": {
         localPlan: "https://www.hants.gov.uk/landplanningandenvironment/strategic-planning/local-plan",
-        bap: "https://www.hiwwt.org.uk/" },
+        bap: "https://www.hiwwt.org.uk/conservation/nature-recovery" },
       "Gloucestershire": {
         localPlan: "https://www.gloucestershire.gov.uk/planning-and-environment/planning-policy/",
-        bap: "https://www.gloucestershirewildlifetrust.co.uk/" },
+        bap: "https://www.gloucestershirewildlifetrust.co.uk/nature-recovery" },
       "Oxfordshire": {
         localPlan: "https://www.oxfordshire.gov.uk/residents/environment-and-planning/planning/local-plans",
-        bap: "https://www.bbowt.org.uk/" },
+        bap: "https://www.bbowt.org.uk/nature-recovery" },
       "Cardiff": {
         localPlan: "https://www.cardiff.gov.uk/ENG/resident/Planning/Planning-policy/Local-Development-Plan/Pages/Local-Development-Plan.aspx",
-        bap: "https://www.visitwales.com/" },
+        bap: "https://www.glamorganwildlife.org/nature-recovery" },
       "Vale of Glamorgan": {
         localPlan: "https://www.valeofglamorgan.gov.uk/en/our_services/planning/planning_policy/local_development_plan.aspx",
-        bap: "https://www.glamorganwildlife.org/" },
+        bap: "https://www.glamorganwildlife.org/nature-recovery" },
     },
   };
   // ══════════════════════════════════════════════════════════════════════════
@@ -2277,10 +2277,11 @@ require([
       return hyperlink();
     }
 
-    // LNR — REF_CODE
+    // LNR — Google search (NE citation pages don't work reliably for LNRs)
     if (shortName.includes("lnr") || shortName.includes("local nature")) {
-      const code = attrs["REF_CODE"];
-      return code ? `${BASE}S${code}` : null;
+      const rawName = String(attrs["NAME"] || attrs["LABEL"] || "").trim();
+      const searchName = rawName || "local nature reserve";
+      return `https://www.google.com/search?q=${encodeURIComponent(searchName + " local nature reserve")}&ie=UTF-8`;
     }
 
     // AONB — HOTLINK field
@@ -2375,6 +2376,9 @@ require([
           name = `${name} RAMSAR`;
         } else if ((sn.includes("nnr") || sn.includes("national nature")) && !/nnr|national nature reserve/i.test(name)) {
           name = `${name} NNR`;
+        } else if ((sn.includes("lnr") || sn.includes("local nature")) && !/lnr|local nature reserve/i.test(name)) {
+          // LNR names come in ALL CAPS — convert to title case then append LNR
+          name = name.toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) + " LNR";
         } else if (sn.includes("spa") && !/spa|special protection/i.test(name)) {
           name = `${name} SPA`;
         } else if (sn.includes("sac") && !/sac|special area/i.test(name)) {
