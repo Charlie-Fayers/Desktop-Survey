@@ -1971,22 +1971,32 @@ require([
         const PAGE = 500;
 
         if (cfg.type === "lad") {
-          // Query using the RLB centroid to find which local authority the site is in
-          const centroid = selectedGeom.centroid || selectedGeom.extent
-            ? { x: (selectedGeom.extent.xmin + selectedGeom.extent.xmax) / 2,
-                y: (selectedGeom.extent.ymin + selectedGeom.extent.ymax) / 2,
-                spatialReference: selectedGeom.spatialReference }
-            : selectedGeom;
+          // Query using the RLB centroid point to find which single LA the site is in
+          let centroidGeom;
+          if (selectedGeom.centroid) {
+            centroidGeom = selectedGeom.centroid;
+          } else if (selectedGeom.extent) {
+            centroidGeom = {
+              type: "point",
+              x: (selectedGeom.extent.xmin + selectedGeom.extent.xmax) / 2,
+              y: (selectedGeom.extent.ymin + selectedGeom.extent.ymax) / 2,
+              spatialReference: selectedGeom.spatialReference,
+            };
+          } else {
+            centroidGeom = selectedGeom;
+          }
           const ladQ = new Query({
-            geometry: centroid,
+            geometry: centroidGeom,
+            geometryType: "esriGeometryPoint",
             spatialRelationship: "intersects",
             outFields: ["LAD22NM", "LAD22CD"],
             returnGeometry: false,
-            num: 5,
+            num: 1,
           });
           const ladFs = await queryREST.executeQueryJSON(url, ladQ);
           const ladFeatures = ladFs.features || [];
           const ladNames = [...new Set(ladFeatures.map(f => f.attributes["LAD22NM"]).filter(Boolean))];
+          console.log("LAD result:", ladNames);
           results[cfg.title] = {
             status: ladNames.length > 0 ? "found" : "absent",
             count: ladNames.length,
